@@ -23,6 +23,7 @@ export class EventService {
       date: new Date(request.date),
       host_id: request.hostId,
       guest_ids: request.guestIds,
+      guest_invites: request.guestInvites,
       created_at: now,
       updated_at: now,
     };

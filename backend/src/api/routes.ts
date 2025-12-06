@@ -4,9 +4,11 @@ import { ChemistryPredictor } from '../services/chemistryPredictor.js';
 import { EventService } from '../services/eventService.js';
 import { GraphAnalyzer } from '../services/graphAnalyzer.js';
 import { FrontendAdapter } from '../services/frontendAdapter.js';
+import { InvitationService } from '../services/invitationService.js';
 import { PrivacyGuard } from '../utils/privacy.js';
 import { logger } from '../utils/logger.js';
 import { FrontendCommunicationProfile, FrontendEvent, FrontendGuest } from '../models/FrontendModels.js';
+import { InviteRequest, GuestInvite } from '../models/Event.js';
 
 /**
  * API Routes
@@ -16,7 +18,8 @@ export function createRouter(
   profileBuilder: ProfileBuilder,
   chemistryPredictor: ChemistryPredictor,
   eventService: EventService,
-  graphAnalyzer: GraphAnalyzer
+  graphAnalyzer: GraphAnalyzer,
+  invitationService?: InvitationService
 ) {
   const router = express.Router();
 
@@ -236,34 +239,96 @@ export function createRouter(
   });
 
   /**
-   * Send invitations (mock - would integrate with Series API)
+   * Send invitations via Series iMessage API
    * POST /api/events/:eventId/invite
+   * Body: { invites: [{ userId?, phoneNumber, name? }] }
    */
   router.post('/events/:eventId/invite', async (req: Request, res: Response) => {
     try {
       const { eventId } = req.params;
+      const { invites } = req.body as { invites?: InviteRequest[] };
+      
       const event = eventService.getEvent(eventId);
 
       if (!event) {
         return res.status(404).json({ error: 'Event not found' });
       }
 
-      // Mock invitation sending
-      // In production, this would call Series messaging API
-      logger.info(`Sending invitations for event ${eventId} to ${event.guest_ids.length} guests`);
+      // Validate invites array
+      if (!invites || !Array.isArray(invites) || invites.length === 0) {
+        return res.status(400).json({ 
+          error: 'invites array required with at least one invite',
+          example: {
+            invites: [
+              { phoneNumber: '+1234567890', userId: 'user-1', name: 'John Doe' }
+            ]
+          }
+        });
+      }
 
-      const invitations = event.guest_ids.map(guestId => ({
-        guestId,
-        status: 'sent',
-        message: `You've been invited to ${event.title} on ${event.date.toISOString()}`,
-      }));
+      // Convert to GuestInvite format
+      const guestInvites: GuestInvite[] = invites.map(invite => {
+        // Try to get chemistry score if userId provided
+        let chemistryScore = 75; // default
+        if (invite.userId) {
+          const profile = profileBuilder.getProfile(invite.userId);
+          // Get chemistry score from frontend adapter if needed
+          if (profile) {
+            // Use individual chemistry calculation
+            chemistryScore = 75; // TODO: calculate from profile
+          }
+        }
 
-      res.json({
-        success: true,
-        eventId,
-        invitations,
-        note: 'Mock invitations - integrate with Series API in production',
+        return {
+          user_id: invite.userId || `guest_${Date.now()}`,
+          phone_number: invite.phoneNumber,
+          name: invite.name,
+          chemistry_score: chemistryScore,
+          rsvp_status: 'pending',
+        };
       });
+
+      logger.info(`Sending invitations for event ${eventId} to ${guestInvites.length} guests`);
+
+      // Use InvitationService if available, otherwise mock
+      if (invitationService && invitationService.isEnabled()) {
+        logger.info('Using Series iMessage API to send invitations');
+        const results = await invitationService.sendBulkInvitations(event, guestInvites);
+
+        const successful = results.filter(r => r.success).length;
+        const failed = results.filter(r => !r.success);
+
+        res.json({
+          success: true,
+          eventId,
+          total: results.length,
+          successful,
+          failed: failed.length,
+          invitations: results.map(r => ({
+            guestId: r.guest.user_id,
+            phoneNumber: r.guest.phone_number,
+            status: r.success ? 'sent' : 'failed',
+            error: r.error,
+            chatId: r.chatId,
+          })),
+        });
+      } else {
+        // Mock mode
+        logger.info('Mock mode: Simulating invitation sending');
+        const invitations = guestInvites.map(guest => ({
+          guestId: guest.user_id,
+          phoneNumber: guest.phone_number,
+          status: 'sent' as const,
+          message: `You've been invited to ${event.title} on ${event.date.toISOString()}`,
+        }));
+
+        res.json({
+          success: true,
+          eventId,
+          invitations,
+          note: 'Mock invitations - Series API credentials not configured',
+        });
+      }
     } catch (error) {
       logger.error('Error sending invitations', { error });
       res.status(500).json({ error: 'Internal server error' });
@@ -458,6 +523,15 @@ export function createRouter(
         chemistryScore = chemistry.groupScore;
       }
 
+      // Store guest invites with phone numbers if provided
+      const guestInvites: GuestInvite[] | undefined = guests?.map((g: any) => ({
+        user_id: g.userId,
+        phone_number: g.phone_number || g.phoneNumber,
+        name: g.name,
+        chemistry_score: g.individualChemistry || chemistryScore,
+        rsvp_status: 'pending',
+      }));
+
       const event: FrontendEvent = {
         id: `event_${Date.now()}`,
         title,
@@ -471,17 +545,97 @@ export function createRouter(
       };
 
       // Also save in backend event service format
-      await eventService.createEvent({
+      const backendEvent = await eventService.createEvent({
         title,
         description: description || '',
         date: new Date(date).toISOString(),
         hostId: host,
         guestIds: guests ? guests.map((g: FrontendGuest) => g.userId) : [],
+        guestInvites,
       });
+
+      // Update event with guest invites if provided
+      if (guestInvites && guestInvites.length > 0) {
+        await eventService.updateEvent(backendEvent.id, {
+          guest_invites: guestInvites,
+        });
+      }
 
       res.status(201).json(event);
     } catch (error) {
       logger.error('Error creating event (frontend)', { error });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  /**
+   * Send invitations (frontend format)
+   * POST /api/events-frontend/:eventId/invite
+   * Body: { invites: [{ userId?, phoneNumber, name? }] }
+   */
+  router.post('/events-frontend/:eventId/invite', async (req: Request, res: Response) => {
+    try {
+      const { eventId } = req.params;
+      const { invites } = req.body as { invites?: InviteRequest[] };
+      
+      // Get event from backend service
+      const event = eventService.getEvent(eventId);
+      if (!event) {
+        return res.status(404).json({ error: 'Event not found' });
+      }
+
+      // Validate invites
+      if (!invites || !Array.isArray(invites) || invites.length === 0) {
+        return res.status(400).json({ 
+          error: 'invites array required with at least one invite',
+        });
+      }
+
+      // Convert to GuestInvite format
+      const guestInvites: GuestInvite[] = invites.map(invite => ({
+        user_id: invite.userId || `guest_${Date.now()}_${Math.random()}`,
+        phone_number: invite.phoneNumber,
+        name: invite.name,
+        rsvp_status: 'pending',
+        chemistry_score: 75, // Default score
+      }));
+
+      logger.info(`Sending frontend invitations for event ${eventId} to ${guestInvites.length} guests`);
+
+      // Use InvitationService if available
+      if (invitationService && invitationService.isEnabled()) {
+        const results = await invitationService.sendBulkInvitations(event, guestInvites);
+        const successful = results.filter(r => r.success).length;
+
+        res.json({
+          success: true,
+          eventId,
+          total: results.length,
+          successful,
+          failed: results.length - successful,
+          invitations: results.map(r => ({
+            guestId: r.guest.user_id,
+            phoneNumber: r.guest.phone_number,
+            name: r.guest.name,
+            status: r.success ? 'sent' : 'failed',
+            error: r.error,
+          })),
+        });
+      } else {
+        // Mock mode
+        res.json({
+          success: true,
+          eventId,
+          invitations: guestInvites.map(g => ({
+            guestId: g.user_id,
+            phoneNumber: g.phone_number,
+            status: 'sent',
+            note: 'Mock mode - Series API not configured',
+          })),
+        });
+      }
+    } catch (error) {
+      logger.error('Error sending frontend invitations', { error });
       res.status(500).json({ error: 'Internal server error' });
     }
   });

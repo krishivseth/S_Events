@@ -103,13 +103,31 @@ The core algorithm evaluates:
 
 ## Environment Variables
 
+### Server Configuration
 - `PORT` - Server port (default: 3001)
+- `LOG_LEVEL` - Logging level (default: info)
+- `FRONTEND_URL` - CORS origin (default: *)
+
+### Series iMessage API
+- `SERIES_API_KEY` - Series API key for iMessage service
+- `SERIES_SENDER_PHONE` - Phone number to send from (E.164 format, e.g., +1234567890)
+- `SERIES_API_BASE_URL` - API base URL (defaults to hackathon service)
+- `USE_SERIES_API` - Enable Series API integration (default: false)
+
+### Series Kafka (Confluent Cloud)
+- `SERIES_KAFKA_BROKERS` - Comma-separated broker URLs (e.g., `pkc-xxx.us-east1.gcp.confluent.cloud:9092`)
+- `SERIES_KAFKA_TOPIC` - Topic name
+- `SERIES_KAFKA_GROUP_ID` - Consumer group ID
+- `SERIES_KAFKA_CLIENT_ID` - Client ID
+- `SERIES_KAFKA_API_KEY` - Confluent Cloud API key (for SASL_SSL auth)
+- `SERIES_KAFKA_API_SECRET` - Confluent Cloud API secret
+
+### Legacy Kafka (fallback)
 - `KAFKA_BROKERS` - Comma-separated Kafka broker URLs
 - `KAFKA_TOPIC` - Kafka topic name
 - `KAFKA_GROUP_ID` - Consumer group ID
+- `KAFKA_CLIENT_ID` - Client ID
 - `USE_KAFKA` - Enable Kafka consumer (default: false)
-- `LOG_LEVEL` - Logging level (default: info)
-- `FRONTEND_URL` - CORS origin (default: *)
 
 ## Testing
 
