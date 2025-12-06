@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  api:
+    build: .
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=production
+      - PORT=3001
+      - KAFKA_BROKERS=${KAFKA_BROKERS:-}
+      - KAFKA_TOPIC=${KAFKA_TOPIC:-series-messages}
+      - KAFKA_GROUP_ID=${KAFKA_GROUP_ID:-series-events-group}
+      - USE_KAFKA=${USE_KAFKA:-false}
+      - LOG_LEVEL=info
+      - FRONTEND_URL=${FRONTEND_URL:-*}
+    volumes:
+      - ./chemistry.log:/app/chemistry.log
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3001/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
