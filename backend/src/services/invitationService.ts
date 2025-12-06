@@ -226,7 +226,7 @@ export class InvitationService {
   /**
    * Generate personalized invitation message
    */
-  generateInviteMessage(event: Event, guest: GuestInvite): string {
+  generateInviteMessage(event: Event, guest: GuestInvite, allGuests?: GuestInvite[]): string {
     const eventDate = new Date(event.date).toLocaleDateString('en-US', {
       weekday: 'long',
       year: 'numeric',
@@ -247,7 +247,27 @@ export class InvitationService {
       message += `${event.description}\n\n`;
     }
 
-    message += `Your vibe score with this group: ${chemistryScore}% ✨\n\n`;
+    message += `Your VibeCheck with this group: ${chemistryScore}% ✨\n\n`;
+    
+    // Social graph insights - show which friends are going
+    if (allGuests && allGuests.length > 1) {
+      const guestProfile = getDemoProfile(guest.phone_number || '');
+      if (guestProfile) {
+        const friendsGoing = this.findKnownGuestsGoing(guestProfile, allGuests);
+        
+        if (friendsGoing.length > 0) {
+          message += `👥 Your friends going:\n`;
+          friendsGoing.forEach(friend => {
+            message += `   • ${friend.name}`;
+            if (friend.context) {
+              message += ` (${friend.context})`;
+            }
+            message += `\n`;
+          });
+          message += `\n`;
+        }
+      }
+    }
     
     if (chemistryScore >= 80) {
       message += `You'd mesh really well with the other attendees!\n\n`;
@@ -258,6 +278,38 @@ export class InvitationService {
     message += `Interested? Reply YES to RSVP!`;
 
     return message;
+  }
+
+  /**
+   * Find guests that the current guest knows (1st degree connections)
+   */
+  private findKnownGuestsGoing(
+    guestProfile: any,
+    allGuests: GuestInvite[]
+  ): Array<{name: string; context?: string}> {
+    if (!guestProfile.connections) {
+      return [];
+    }
+
+    return allGuests
+      .filter(g => g.user_id !== guestProfile.userId)
+      .map(g => {
+        const otherProfile = getDemoProfile(g.phone_number || '');
+        if (!otherProfile) return null;
+        
+        const connection = guestProfile.connections.find(
+          (c: any) => c.userId === otherProfile.userId
+        );
+        
+        if (connection && connection.connectionType === '1st') {
+          return {
+            name: otherProfile.name,
+            context: connection.context
+          };
+        }
+        return null;
+      })
+      .filter((f): f is {name: string; context?: string} => f !== null);
   }
 
   /**
@@ -429,11 +481,86 @@ export class InvitationService {
   }
 
   /**
+   * Send RSVP notification to host when a guest responds
+   */
+  async sendRSVPNotification(
+    event: Event,
+    guest: GuestInvite,
+    rsvpStatus: 'accepted' | 'declined'
+  ): Promise<{ success: boolean; error?: string }> {
+    if (!this.enabled) {
+      logger.info(`Mock: Would send RSVP notification to host for ${guest.name}`);
+      return { success: true };
+    }
+
+    // Find the host's phone number from demo profiles
+    // For demo, host is typically the first demo number or we can look it up
+    const DEMO_PHONE_NUMBERS = ['+14843693839', '+19178615579'];
+    
+    // Try to find host phone - for demo, find by host_id matching a demo profile
+    let hostPhone: string | null = null;
+    for (const phone of DEMO_PHONE_NUMBERS) {
+      const demoProfile = getDemoProfile(phone);
+      if (demoProfile?.userId === event.host_id) {
+        hostPhone = phone;
+        break;
+      }
+    }
+
+    // Fallback: if host not found in demo profiles, use first demo number as default
+    if (!hostPhone) {
+      hostPhone = DEMO_PHONE_NUMBERS[0];
+      logger.info(`RSVP notification: Host ${event.host_id} not in demo profiles, using default: ${hostPhone}`);
+    }
+
+    const normalized = normalizePhoneNumber(hostPhone);
+    if (!normalized) {
+      return { success: false, error: 'Invalid host phone number' };
+    }
+
+    // Generate notification message
+    const statusText = rsvpStatus === 'accepted' ? '✅ accepted' : '❌ declined';
+    const message = `📅 RSVP Update for "${event.title}"\n\n` +
+      `${guest.name || 'A guest'} has ${statusText} your invitation.\n\n` +
+      `Event: ${event.title}\n` +
+      `Date: ${event.date.toLocaleDateString()}\n` +
+      `Guest: ${guest.name || 'Guest'}`;
+
+    // Get or create chat with host
+    const chat = await this.getOrCreateChat(normalized);
+    if (!chat) {
+      return { success: false, error: 'Failed to get or create chat with host' };
+    }
+
+    // Send notification (validate recipient)
+    if (!this.isAuthorizedRecipient(normalized)) {
+      logger.warn('RSVP notification: Blocked notification to unauthorized recipient', {
+        hostPhone: normalized,
+      });
+      return { success: false, error: 'Host not authorized' };
+    }
+
+    const sent = await this.sendMessage(chat.id, message, normalized);
+    if (!sent) {
+      return { success: false, error: 'Failed to send RSVP notification' };
+    }
+
+    logger.info(`RSVP notification sent to host ${normalized}`, {
+      eventId: event.id,
+      guestName: guest.name,
+      status: rsvpStatus,
+    });
+
+    return { success: true };
+  }
+
+  /**
    * Send event invitation to a single guest
    */
   async sendEventInvitation(
     event: Event,
-    guest: GuestInvite
+    guest: GuestInvite,
+    allGuests?: GuestInvite[]
   ): Promise<{ success: boolean; error?: string; chatId?: number }> {
     if (!guest.phone_number) {
       return {
@@ -472,8 +599,8 @@ export class InvitationService {
       };
     }
 
-    // Generate message
-    const message = this.generateInviteMessage(event, guest);
+    // Generate message (pass allGuests for social graph insights)
+    const message = this.generateInviteMessage(event, guest, allGuests);
 
     // Send message (pass recipient phone for validation)
     const sent = await this.sendMessage(chat.id, message, normalized);
@@ -502,7 +629,8 @@ export class InvitationService {
 
     for (const guest of guests) {
       logger.info(`Sending invitation to ${guest.name || guest.user_id} at ${guest.phone_number}`);
-      const result = await this.sendEventInvitation(event, guest);
+      // Pass all guests so each guest can see who else is going
+      const result = await this.sendEventInvitation(event, guest, guests);
       results.push({
         guest,
         ...result,

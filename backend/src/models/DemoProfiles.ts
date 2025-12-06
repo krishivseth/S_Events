@@ -12,6 +12,12 @@ export interface DemoProfile {
   company: string;
   school: string;
   bio: string;
+  connections: {
+    userId: string;
+    connectionType: '1st' | '2nd' | '3rd';
+    context?: string; // "Met at Stanford" or "Work together"
+    mutualFriends?: string[]; // for 2nd/3rd degree
+  }[];
 }
 
 export const DEMO_PROFILES: Record<string, DemoProfile> = {
@@ -24,6 +30,18 @@ export const DEMO_PROFILES: Record<string, DemoProfile> = {
     company: 'Google',
     school: 'Stanford University',
     bio: 'Product Manager at Google, passionate about building great user experiences. Love connecting with fellow tech enthusiasts!',
+    connections: [
+      {
+        userId: 'demo-guest-2',
+        connectionType: '1st',
+        context: 'Met at tech conference'
+      },
+      {
+        userId: 'current-user',
+        connectionType: '1st',
+        context: 'Stanford classmates'
+      }
+    ]
   },
   '+19178615579': {
     userId: 'demo-guest-2',
@@ -34,6 +52,18 @@ export const DEMO_PROFILES: Record<string, DemoProfile> = {
     company: 'Meta',
     school: 'MIT',
     bio: 'Software Engineer at Meta. Always excited to meet new people and discuss the latest in tech!',
+    connections: [
+      {
+        userId: 'demo-guest-1',
+        connectionType: '1st',
+        context: 'Met at tech conference'
+      },
+      {
+        userId: 'current-user',
+        connectionType: '1st',
+        context: 'College friends'
+      }
+    ]
   },
 };
 

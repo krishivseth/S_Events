@@ -134,7 +134,7 @@ Possible intents:
 - rsvp: User is responding to an invitation (e.g., "yes", "I'm in", "can't make it")
 - update_event: User wants to modify an existing event (e.g., "change dinner to Saturday")
 - cancel_event: User wants to cancel an event (e.g., "cancel the dinner")
-- query: User is asking about events or chemistry scores (e.g., "what events do I have?", "what's the vibe score?")
+- query: User is asking about events or chemistry scores (e.g., "what events do I have?", "what's the VibeCheck?")
 
 Extract all relevant details in structured format. For dates, use YYYY-MM-DD format. For times, use HH:MM 24-hour format.
 If date is relative (e.g., "Friday", "tomorrow"), calculate the actual date based on today's date: ${new Date().toISOString().split('T')[0]}.`;

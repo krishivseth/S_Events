@@ -373,7 +373,9 @@ export default function EventDashboard() {
       
       toast({ 
         title: "RSVP Updated", 
-        description: status === 'accepted' ? "You're going to this event!" : "You've declined this invite." 
+        description: status === 'accepted' 
+          ? "You're going! Check your iMessage for confirmation." 
+          : "You've declined the invite. The host has been notified." 
       });
       
       // Reload events to show updated RSVP status

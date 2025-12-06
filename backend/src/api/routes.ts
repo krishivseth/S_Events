@@ -794,9 +794,20 @@ export function createRouter(
           })),
         });
       }
-    } catch (error) {
-      logger.error('Error sending frontend invitations', { error });
-      res.status(500).json({ error: 'Internal server error' });
+    } catch (error: any) {
+      const { eventId } = req.params;
+      const { invites } = req.body as { invites?: InviteRequest[] };
+      
+      logger.error('Error sending frontend invitations', { 
+        error: error?.message || String(error),
+        stack: error?.stack,
+        eventId,
+        invites: invites?.length || 0,
+      });
+      res.status(500).json({ 
+        error: 'Internal server error',
+        message: error?.message || 'Unknown error occurred',
+      });
     }
   });
 
@@ -915,10 +926,14 @@ export function createRouter(
         maxAttendees: event.guest_ids.length + 5,
         guests: frontendGuests, // Use the mapped guests with RSVP status
         chemistryScore: 0, // Would calculate if needed
+        rsvpStatus: currentUserRSVP, // Include current user's RSVP status
       };
 
       // Add RSVP status for current user if this is an invited event
-      const response: any = { ...frontendEvent };
+      const response: any = { 
+        ...frontendEvent,
+        rsvpStatus: currentUserRSVP, // Include current user's RSVP status
+      };
       if (currentUserRSVP !== undefined && event.host_id !== currentUserId) {
         response.rsvpStatus = currentUserRSVP;
       }
@@ -1028,11 +1043,18 @@ export function createRouter(
       const guestInvites = event.guest_invites || [];
       const guestIndex = guestInvites.findIndex(invite => invite.user_id === userId);
 
+      // Get the old status BEFORE updating
+      const oldStatus = guestIndex !== -1 ? guestInvites[guestIndex].rsvp_status : 'pending';
+      const guestInfo = guestIndex !== -1 ? { ...guestInvites[guestIndex] } : { user_id: userId };
+
       if (guestIndex === -1) {
         // Guest not found in invites, add them
         guestInvites.push({
           user_id: userId,
+          phone_number: guestInfo.phone_number,
+          name: guestInfo.name,
           rsvp_status: status === 'accepted' ? 'accepted' : status === 'declined' ? 'declined' : 'pending',
+          chemistry_score: guestInfo.chemistry_score || 75,
         });
       } else {
         // Update existing guest's RSVP status
@@ -1048,13 +1070,105 @@ export function createRouter(
         return res.status(404).json({ error: 'Event not found' });
       }
 
-      logger.info(`RSVP updated for user ${userId} on event ${eventId}: ${status}`, {
-        guestInvitesCount: guestInvites.length,
-        guestIdsCount: updatedGuestIds.length,
-      });
+      logger.info(`RSVP updated for user ${userId} on event ${eventId}: ${oldStatus} -> ${status}`);
+
+      // Get updated event and guest info
+      const updatedEvent = eventService.getEvent(eventId);
+      if (!updatedEvent) {
+        return res.status(404).json({ error: 'Event not found after update' });
+      }
+
+      const guestInvite = updatedEvent.guest_invites?.find(inv => inv.user_id === userId);
+      const guestName = guestInvite?.name || 'A guest';
+
+      // 1. Send notification to HOST via web chat interface
+      if ((status === 'accepted' || status === 'declined') && oldStatus !== status) {
+        try {
+          const hostId = updatedEvent.host_id;
+          const statusText = status === 'accepted' ? '✅ accepted' : '❌ declined';
+          const hostNotification = `📅 RSVP Update for "${updatedEvent.title}"\n\n` +
+            `${guestName} has ${statusText} your invitation.\n\n` +
+            `Event: ${updatedEvent.title}\n` +
+            `Date: ${updatedEvent.date.toLocaleDateString()}\n` +
+            `Guest: ${guestName}`;
+
+          // Add to host's web chat
+          chatMessageStore.addSystemMessage(hostId, hostNotification, {
+            eventId: updatedEvent.id,
+            type: 'rsvp_confirmation',
+          });
+
+          logger.info(`RSVP notification added to host's web chat`, {
+            hostId,
+            eventId,
+            guestName,
+            status,
+          });
+        } catch (error: any) {
+          logger.error('Failed to add RSVP notification to host chat', {
+            error: error.message,
+          });
+        }
+      }
+
+      // 2. Send confirmation to GUEST via iMessage (if they accepted or declined)
+      if ((status === 'accepted' || status === 'declined') && invitationService && invitationService.isEnabled()) {
+        try {
+          if (guestInvite?.phone_number) {
+            const normalized = normalizePhoneNumber(guestInvite.phone_number);
+            if (normalized) {
+              // Get or create chat for guest
+              // Note: getOrCreateChat is a public method but TypeScript doesn't see it
+              // We access it directly since sendMessage will validate the recipient
+              const chat = await (invitationService as { getOrCreateChat(phone: string): Promise<{ id: number } | null> }).getOrCreateChat(normalized);
+              if (chat?.id) {
+                const confirmationMessage = status === 'accepted' 
+                  ? `✅ RSVP Confirmed!\n\n` +
+                    `You're going to "${updatedEvent.title}"\n\n` +
+                    `Date: ${updatedEvent.date.toLocaleDateString()}\n` +
+                    `Time: ${updatedEvent.date.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}\n\n` +
+                    `See you there! 🎉`
+                  : `📅 RSVP Updated\n\n` +
+                    `You've declined the invitation to "${updatedEvent.title}".\n\n` +
+                    `Date: ${updatedEvent.date.toLocaleDateString()}\n` +
+                    `The host has been notified.\n\n` +
+                    `You can change your RSVP anytime if your plans change.`;
+
+                // Send confirmation message (sendMessage will validate recipient)
+                const sent = await invitationService.sendMessage(chat.id, confirmationMessage, normalized);
+                
+                if (sent) {
+                  logger.info(`RSVP confirmation sent to guest via iMessage`, {
+                    guestPhone: normalized,
+                    eventId,
+                    chatId: chat.id,
+                  });
+                } else {
+                  logger.warn(`Failed to send RSVP confirmation to guest (sendMessage returned false)`, {
+                    guestPhone: normalized,
+                    eventId,
+                  });
+                }
+              } else {
+                logger.warn(`Failed to get or create chat for guest`, {
+                  guestPhone: normalized,
+                  eventId,
+                });
+              }
+            }
+          }
+        } catch (error: any) {
+          // Don't fail the RSVP update if iMessage fails
+          logger.error('Failed to send RSVP confirmation to guest', {
+            error: error.message,
+            eventId,
+            userId,
+          });
+        }
+      }
 
       // Return updated event data so frontend can refresh
-      const updatedEvent = eventService.getEvent(eventId);
+      // updatedEvent is already declared above, reuse it
       if (!updatedEvent) {
         return res.status(404).json({ error: 'Event not found after update' });
       }
@@ -1078,7 +1192,7 @@ export function createRouter(
       });
 
       // Find current user's RSVP status
-      let currentUserRSVP: 'going' | 'maybe' | 'pending' | undefined;
+      let currentUserRSVP: 'going' | 'maybe' | 'pending' | 'declined' | undefined;
       if (updatedEvent.host_id === userId) {
         currentUserRSVP = 'going';
       } else {
@@ -1087,7 +1201,7 @@ export function createRouter(
           if (userInvite.rsvp_status === 'accepted') {
             currentUserRSVP = 'going';
           } else if (userInvite.rsvp_status === 'declined') {
-            currentUserRSVP = 'pending';
+            currentUserRSVP = 'declined';
           } else {
             currentUserRSVP = 'pending';
           }

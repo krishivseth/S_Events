@@ -80,7 +80,7 @@ Vibe: "Hey Alex! 👋
 
 Sarah is hosting 'Dinner' on Friday, Dec 13 at 8:00 PM.
 
-Your vibe score with this group: 87% ✨
+Your VibeCheck with this group: 87% ✨
 
 Interested? Reply YES, NO, or MAYBE"
 
@@ -287,7 +287,7 @@ For your hackathon demo:
 
 3. **Live Demo** (20-35s):
    - Send text message from phone
-   - Show Vibe responds with chemistry score (87%)
+   - Show Vibe responds with VibeCheck (87%)
    - Show invites sent automatically
    - Show RSVP flow
 

@@ -20,7 +20,7 @@ function calculateGroupChemistryClient(guests: CommunicationProfile[]): Chemistr
   if (guests.length === 1) {
     return {
       groupScore: 85,
-      insights: ['Add more guests to see vibe predictions'],
+        insights: ['Add more guests to see VibeCheck predictions'],
       warnings: [],
       pairwiseScores: {}
     };

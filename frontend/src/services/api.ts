@@ -96,8 +96,9 @@ export const eventsApi = {
   /**
    * Get event by ID
    */
-  async getById(eventId: string): Promise<any> {
-    return fetchApi<any>(`/events-frontend/${eventId}`);
+  async getById(eventId: string, userId?: string): Promise<any> {
+    const url = userId ? `/events-frontend/${eventId}?userId=${encodeURIComponent(userId)}` : `/events-frontend/${eventId}`;
+    return fetchApi<any>(url);
   },
 
   /**

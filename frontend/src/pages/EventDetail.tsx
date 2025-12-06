@@ -19,6 +19,7 @@ import { mockProfiles } from '@/data/mockEventData';
 import { eventsApi } from '@/services/api';
 import { useEffect, useState } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
+import { findKnownGuestsGoing } from '@/utils/demoConnections';
 
 // Mock event data - in real app this would come from API
 const eventData: Record<string, {
@@ -160,6 +161,7 @@ export default function EventDetail() {
             rsvpStatus: (apiEvent as any).rsvpStatus || (isHosted ? 'going' : 'pending'),
             guests: (apiEvent.guests || []).map((g: any, i: number) => ({
               id: g.userId,
+              userId: g.userId,
               name: g.name || `Guest ${i + 1}`,
               avatar: g.avatar || '',
               status: g.rsvpStatus === 'accepted' ? 'going' : g.rsvpStatus === 'declined' ? 'invited' : g.rsvpStatus === 'maybe' ? 'maybe' : 'invited'
@@ -247,8 +249,8 @@ export default function EventDetail() {
       toast({
         title: status === 'going' ? "You're going!" : "RSVP declined",
         description: status === 'going' 
-          ? `See you at ${event.title}!` 
-          : "We'll miss you at this one.",
+          ? "Your RSVP has been confirmed! Check your iMessage for details." 
+          : "You've declined the invitation. The host has been notified.",
       });
     } catch (error: any) {
       toast({
@@ -514,6 +516,62 @@ export default function EventDetail() {
 
           <Separator className="my-6" />
 
+          {/* Friends Going Section */}
+          {!event.isHosted && user?.userId && (() => {
+            const friendsGoing = findKnownGuestsGoing(
+              user.userId,
+              event.guests.map(g => ({ id: g.id, name: g.name, userId: g.id }))
+            );
+            
+            if (friendsGoing.length > 0) {
+              return (
+                <motion.div
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: 0.25 }}
+                  className="mb-6"
+                >
+                  <div className="rounded-xl bg-primary/5 border border-primary/20 p-4">
+                    <div className="flex items-center gap-2 mb-3">
+                      <Users className="w-5 h-5 text-primary" />
+                      <h3 className="font-semibold text-lg">Your Friends Going</h3>
+                    </div>
+                    <div className="space-y-3">
+                      {friendsGoing.map((friend) => {
+                        const guest = event.guests.find(g => g.id === friend.id);
+                        return (
+                          <div key={friend.id} className="flex items-center justify-between">
+                            <div className="flex items-center gap-3">
+                              <Avatar className="w-10 h-10">
+                                <AvatarImage src={guest?.avatar} />
+                                <AvatarFallback>{friend.name[0]}</AvatarFallback>
+                              </Avatar>
+                              <div>
+                                <p className="font-medium">{friend.name}</p>
+                                {friend.context && (
+                                  <p className="text-xs text-muted-foreground">{friend.context}</p>
+                                )}
+                              </div>
+                            </div>
+                            {guest && (
+                              <Badge 
+                                variant={guest.status === 'going' ? 'default' : 'secondary'}
+                                className={guest.status === 'going' ? 'bg-chemistry-high' : ''}
+                              >
+                                {guest.status === 'going' ? 'Going' : guest.status === 'maybe' ? 'Maybe' : 'Invited'}
+                              </Badge>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </motion.div>
+              );
+            }
+            return null;
+          })()}
+
           {/* Guest List */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -572,7 +630,7 @@ export default function EventDetail() {
           className="fixed bottom-0 left-0 right-0 bg-background/95 backdrop-blur-md border-t border-border p-4"
         >
           <div className="container max-w-2xl flex gap-3">
-            {event.rsvpStatus === 'pending' ? (
+            {event.rsvpStatus === 'pending' || event.rsvpStatus === 'declined' ? (
               <>
                 <Button 
                   className="flex-1"
@@ -593,7 +651,7 @@ export default function EventDetail() {
                   <div className="flex-1 flex items-center justify-between">
                     <div className="flex items-center gap-2">
                       <Badge className="bg-chemistry-high">
-                        {event.rsvpStatus === 'going' ? 'Going' : 'Maybe'}
+                        {event.rsvpStatus === 'going' ? 'Going' : event.rsvpStatus === 'declined' ? 'Declined' : 'Maybe'}
                       </Badge>
                       <span className="text-sm text-muted-foreground">You've RSVP'd to this event</span>
                     </div>

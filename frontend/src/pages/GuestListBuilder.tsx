@@ -456,7 +456,7 @@ export default function GuestListBuilder() {
                   </TabsTrigger>
                 </TabsList>
 
-                <TabsContent value="chemistry" className="flex-1 flex flex-col mt-0">
+                <TabsContent value="chemistry" className="flex-1 flex flex-col mt-0 min-h-0">
                   {/* Chemistry Score */}
                   <div className="text-center mb-2">
                     <ChemistryScore score={analysis.groupScore} size="lg" />
@@ -473,10 +473,12 @@ export default function GuestListBuilder() {
                   </div>
 
                   {/* Insights */}
-                  <InsightsPanel analysis={analysis} />
+                  <div className="mt-2">
+                    <InsightsPanel analysis={analysis} />
+                  </div>
                 </TabsContent>
 
-                <TabsContent value="availability" className="mt-0">
+                <TabsContent value="availability" className="mt-0 -mt-4">
                   <AvailabilityHeatmap 
                     guests={selectedGuests} 
                     suggestedTime={suggestedTime}
@@ -487,7 +489,7 @@ export default function GuestListBuilder() {
               </Tabs>
 
               {/* Actions */}
-              <div className="flex flex-col gap-3 mt-4">
+              <div className="flex flex-col gap-3 mt-2">
                 {/* Auto Curate Button */}
                 <Button
                   className="w-full glow-primary"
