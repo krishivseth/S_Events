@@ -76,8 +76,8 @@ ehthumbs.db
 Desktop.ini
 
 # ============================================
-# Optional: Uncomment if you want to exclude these
+# Test and debug scripts (keep in scripts/ but ignore generated files)
 # ============================================
-# **/test-api.sh
-# **/verify-computation.sh
-# **/test-integration.sh
+**/test-*.sh
+**/verify-*.sh
+**/*.test.log

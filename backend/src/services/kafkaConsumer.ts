@@ -28,8 +28,8 @@ export class KafkaMessageConsumer {
     groupId: string,
     clientId?: string,
     authConfig?: {
-      apiKey?: string;
-      apiSecret?: string;
+      saslUsername?: string;
+      saslPassword?: string;
       securityProtocol?: 'SASL_SSL' | 'PLAINTEXT';
     }
   ) {
@@ -50,12 +50,12 @@ export class KafkaMessageConsumer {
     };
 
     // Add SASL_SSL authentication if credentials provided (Confluent Cloud)
-    if (authConfig?.apiKey && authConfig?.apiSecret) {
+    if (authConfig?.saslUsername && authConfig?.saslPassword) {
       kafkaConfig.ssl = true;
       kafkaConfig.sasl = {
         mechanism: 'plain',
-        username: authConfig.apiKey,
-        password: authConfig.apiSecret,
+        username: authConfig.saslUsername,
+        password: authConfig.saslPassword,
       };
       logger.info('Kafka configured with SASL_SSL authentication (Confluent Cloud)');
     }
@@ -79,8 +79,8 @@ export class KafkaMessageConsumer {
       credentials.kafka.groupId,
       credentials.kafka.clientId,
       {
-        apiKey: credentials.kafka.apiKey,
-        apiSecret: credentials.kafka.apiSecret,
+        saslUsername: credentials.kafka.saslUsername,
+        saslPassword: credentials.kafka.saslPassword,
         securityProtocol: credentials.kafka.securityProtocol,
       }
     );

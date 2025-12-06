@@ -28,6 +28,7 @@ import { mockProfiles } from '@/data/mockEventData';
 import { CommunicationProfile } from '@/types/event';
 import { calculateGroupChemistry, optimizeGuestList } from '@/services/chemistryCalculator';
 import { toast } from '@/hooks/use-toast';
+import { eventsApi } from '@/services/api';
 
 // Mock existing event guest data - in real app this would come from API
 const existingEventGuests: Record<string, string[]> = {
@@ -256,22 +257,88 @@ export default function GuestListBuilder() {
 
   const handleSaveChanges = async () => {
     setIsSending(true);
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    setIsSending(false);
-    setShowInviteModal(false);
     
-    if (isEditMode) {
+    try {
+      let currentEventId = eventId;
+      
+      // If creating new event, first create the event
+      if (!isEditMode) {
+        const savedEvent = sessionStorage.getItem('newEvent');
+        if (!savedEvent) {
+          toast({
+            title: "Error",
+            description: "Event data not found. Please create an event first.",
+            variant: "destructive",
+          });
+          setIsSending(false);
+          return;
+        }
+        
+        const eventData = JSON.parse(savedEvent);
+        const eventDate = new Date(`${eventData.date}T${eventData.time || '19:00'}`);
+        
+        // Create the event
+        const newEvent = await eventsApi.create({
+          title: eventData.title || 'New Event',
+          description: eventData.description || '',
+          date: eventDate.toISOString(),
+          host: 'current-user', // TODO: Get from auth context
+          type: eventData.isPrivate ? 'private' : 'public',
+          maxAttendees: eventData.maxAttendees || 20,
+          guests: selectedGuests.map(g => ({
+            userId: g.userId,
+            name: g.name,
+            avatar: g.avatar,
+            rsvpStatus: 'pending',
+            individualChemistry: g.individualChemistry || 75,
+          })),
+        });
+        
+        currentEventId = newEvent.id;
+      }
+      
+      if (!currentEventId) {
+        throw new Error('Event ID is required');
+      }
+      
+      // Send invitations
+      const invites = selectedGuests.map(guest => ({
+        userId: guest.userId,
+        phoneNumber: guest.phoneNumber || '', // May not have phone in mock data
+        name: guest.name,
+      }));
+      
+      const result = await eventsApi.sendInvites(currentEventId, invites);
+      
+      setIsSending(false);
+      setShowInviteModal(false);
+      
+      if (result.success) {
+        const successfulCount = result.successful || result.invitations?.filter((i: any) => i.status === 'sent').length || 0;
+        
+        toast({
+          title: "Invitations Sent!",
+          description: `Successfully sent ${successfulCount} invitation(s) via iMessage.`,
+        });
+        
+        if (isEditMode) {
+          navigate(`/events/${currentEventId}`);
+        } else {
+          // Clear session storage
+          sessionStorage.removeItem('newEvent');
+          navigate('/events');
+        }
+      } else {
+        throw new Error(result.error || 'Failed to send invitations');
+      }
+    } catch (error: any) {
+      setIsSending(false);
+      console.error('Error sending invitations:', error);
       toast({
-        title: "Guest List Updated!",
-        description: `Successfully updated ${selectedGuests.length} guests for this event.`,
+        title: "Error Sending Invitations",
+        description: error.message || 'Failed to send invitations. Please try again.',
+        variant: "destructive",
       });
-      navigate(`/events/${eventId}`);
-    } else {
-      toast({
-        title: "Invitations Sent!",
-        description: `${selectedGuests.length} personalized invitations are on their way.`,
-      });
-      navigate('/events');
     }
   };
 

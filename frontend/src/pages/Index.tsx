@@ -34,20 +34,20 @@ export default function Index() {
           
           {/* Primary CTA button */}
           <div className="flex flex-col items-center gap-4 mt-12">
-            <Link to="/create-event">
+            <Link to="/login">
               <motion.button
                 whileHover={{ scale: 1.02 }}
                 whileTap={{ scale: 0.98 }}
                 className="bg-foreground text-background px-12 py-5 rounded-full text-lg font-medium hover:opacity-90 transition-opacity"
               >
-                Try it out
+                Get Started
               </motion.button>
             </Link>
           </div>
           
           {/* Sign-in link for returning users */}
           <p className="text-sm text-muted-foreground mt-6">
-            <Link to="/events" className="hover:text-foreground transition-colors underline underline-offset-4">
+            <Link to="/login" className="hover:text-foreground transition-colors underline underline-offset-4">
               Already have an account? Sign in →
             </Link>
           </p>

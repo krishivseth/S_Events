@@ -53,7 +53,18 @@ export class EventService {
    */
   getEventsForUser(userId: string): Event[] {
     return Array.from(this.events.values()).filter(
-      event => event.host_id === userId || event.guest_ids.includes(userId)
+      event => {
+        // Check if user is host
+        if (event.host_id === userId) return true;
+        
+        // Check if user is in guest_ids
+        if (event.guest_ids.includes(userId)) return true;
+        
+        // Check if user is in guest_invites (for demo users)
+        if (event.guest_invites?.some(invite => invite.user_id === userId)) return true;
+        
+        return false;
+      }
     );
   }
 

@@ -12,10 +12,10 @@
  * - Empty states for each category
  */
 
-import { useState } from 'react';
-import { Link, useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Calendar, Users, Plus, Clock, MapPin, Check, X, MoreHorizontal, Pencil } from 'lucide-react';
+import { Calendar, Users, Plus, Clock, MapPin, Check, X, MoreHorizontal, Pencil, MessageSquare, Loader2 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -28,6 +28,8 @@ import {
 import Navbar from '@/components/Navbar';
 import { mockEvents, mockProfiles } from '@/data/mockEventData';
 import { toast } from '@/hooks/use-toast';
+import { eventsApi } from '@/services/api';
+import { useAuth } from '@/contexts/AuthContext';
 
 /**
  * Props for the EventCard component
@@ -49,6 +51,8 @@ interface EventCardProps {
   isHosted?: boolean;
   onEdit?: (id: string) => void;
   onManageGuests?: (id: string) => void;
+  onRSVP?: (eventId: string, status: 'accepted' | 'declined') => Promise<void>;
+  userId?: string;
 }
 
 /**
@@ -61,7 +65,7 @@ interface EventCardProps {
  * - Context menu for hosted events
  * - RSVP buttons for pending invites
  */
-function EventCard({ event, isHosted = false, onEdit, onManageGuests }: EventCardProps) {
+function EventCard({ event, isHosted = false, onEdit, onManageGuests, onRSVP, userId }: EventCardProps) {
   // Check if event is in the past for styling
   const isPast = event.date < new Date();
 
@@ -139,8 +143,49 @@ function EventCard({ event, isHosted = false, onEdit, onManageGuests }: EventCar
                       <Users className="w-4 h-4 mr-2" />
                       Manage Guests
                     </DropdownMenuItem>
-                    <DropdownMenuItem onClick={(e) => e.preventDefault()}>Send Reminders</DropdownMenuItem>
-                    <DropdownMenuItem className="text-destructive" onClick={(e) => e.preventDefault()}>Cancel Event</DropdownMenuItem>
+                    <DropdownMenuItem onClick={async (e) => {
+                      e.preventDefault();
+                      try {
+                        const result = await eventsApi.sendReminders(event.id);
+                        toast({
+                          title: "Reminders Sent!",
+                          description: result.message || "Reminders have been sent to all guests.",
+                        });
+                      } catch (error: any) {
+                        toast({
+                          title: "Error",
+                          description: error.message || "Failed to send reminders.",
+                          variant: "destructive",
+                        });
+                      }
+                    }}>
+                      <MessageSquare className="w-4 h-4 mr-2" />
+                      Send Reminders
+                    </DropdownMenuItem>
+                    <DropdownMenuItem className="text-destructive" onClick={async (e) => {
+                      e.preventDefault();
+                      if (!confirm("Are you sure you want to cancel this event? This action cannot be undone.")) {
+                        return;
+                      }
+                      try {
+                        await eventsApi.delete(event.id);
+                        toast({
+                          title: "Event Cancelled",
+                          description: "The event has been cancelled and guests have been notified.",
+                        });
+                        // Reload events
+                        window.location.reload();
+                      } catch (error: any) {
+                        toast({
+                          title: "Error",
+                          description: error.message || "Failed to cancel event.",
+                          variant: "destructive",
+                        });
+                      }
+                    }}>
+                      <X className="w-4 h-4 mr-2" />
+                      Cancel Event
+                    </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
               </div>
@@ -174,15 +219,19 @@ function EventCard({ event, isHosted = false, onEdit, onManageGuests }: EventCar
               </div>
             </div>
 
+// This is the fixed RSVP button section that should replace lines 222-274 in EventDashboard.tsx
+
             {/* Quick RSVP buttons for pending invitations */}
-            {!isHosted && event.rsvpStatus === 'pending' && (
-              <div className="flex gap-2 mt-4">
+            {!isHosted && event.rsvpStatus === 'pending' && onRSVP && userId && (
+              <div className="flex gap-2 mt-4" onClick={(e) => e.preventDefault()}>
                 <Button 
                   size="sm" 
                   className="flex-1"
-                  onClick={(e) => {
+                  onClick={async (e) => {
                     e.preventDefault();
-                    toast({ title: "RSVP Updated", description: "You're going to this event!" });
+                    e.stopPropagation();
+                    console.log('Going button clicked for event:', event.id);
+                    await onRSVP(event.id, 'accepted');
                   }}
                 >
                   <Check className="w-3.5 h-3.5 mr-1" />
@@ -191,9 +240,12 @@ function EventCard({ event, isHosted = false, onEdit, onManageGuests }: EventCar
                 <Button 
                   size="sm" 
                   variant="outline"
-                  onClick={(e) => {
+                  className="flex-1"
+                  onClick={async (e) => {
                     e.preventDefault();
-                    toast({ title: "RSVP Updated", description: "You've declined this invite." });
+                    e.stopPropagation();
+                    console.log('Decline button clicked for event:', event.id);
+                    await onRSVP(event.id, 'declined');
                   }}
                 >
                   <X className="w-3.5 h-3.5 mr-1" />
@@ -201,6 +253,7 @@ function EventCard({ event, isHosted = false, onEdit, onManageGuests }: EventCar
                 </Button>
               </div>
             )}
+
           </div>
         </div>
       </Link>
@@ -217,6 +270,11 @@ function EventCard({ event, isHosted = false, onEdit, onManageGuests }: EventCar
  */
 export default function EventDashboard() {
   const navigate = useNavigate();
+  const location = useLocation();
+  const { user } = useAuth();
+  const [hostedEvents, setHostedEvents] = useState<any[]>([]);
+  const [invitedEvents, setInvitedEvents] = useState<any[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
 
   // Sample cover images for hosted events
   const coverImages = [
@@ -224,17 +282,68 @@ export default function EventDashboard() {
     'https://images.unsplash.com/photo-1540575467063-178a50c2df87?w=800&auto=format&fit=crop',
   ];
 
-  // Transform mock events into hosted events with additional data
-  const hostedEvents = mockEvents.map((event, i) => ({
-    id: event.id,
-    title: event.title,
-    description: event.description,
-    date: event.date,
-    location: 'New York, NY',
-    guestCount: 5 + i * 2,
-    maxAttendees: event.maxAttendees,
-    coverImage: coverImages[i % coverImages.length],
-  }));
+  // Load events from API - reload when component mounts or when navigating back
+    const loadEvents = async () => {
+    setIsLoading(true);
+    const userId = user?.userId || 'current-user';
+    
+    try {
+      const apiEvents = await eventsApi.getByUser(userId);
+      // Transform API events to frontend format and separate hosted vs invited
+      const hosted: any[] = [];
+      const invited: any[] = [];
+      
+      apiEvents.forEach((event: any, i: number) => {
+        const isHost = event.host === userId;
+        const transformed = {
+          id: event.id,
+          title: event.title,
+          description: event.description,
+          date: new Date(event.date),
+          location: 'New York, NY',
+          guestCount: event.guests?.length || 0,
+          maxAttendees: event.maxAttendees || 20,
+          coverImage: coverImages[i % coverImages.length],
+          rsvpStatus: event.rsvpStatus, // Include RSVP status from API
+          host: isHost ? undefined : event.host, // Only show host if not the current user
+        };
+        
+        if (isHost) {
+          hosted.push(transformed);
+        } else {
+          invited.push(transformed);
+        }
+      });
+      
+      setHostedEvents(hosted);
+      setInvitedEvents(invited);
+      setIsLoading(false);
+    } catch (error) {
+      console.error('Error loading events:', error);
+      // Fallback to empty arrays
+      setHostedEvents([]);
+      setInvitedEvents([]);
+      setIsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (user?.userId) {
+      loadEvents();
+    }
+  }, [user?.userId]); // Reload when user changes
+
+  // Reload events when page becomes visible (user navigates back)
+  useEffect(() => {
+    if (!user?.userId) return;
+    const handleVisibilityChange = () => {
+      if (!document.hidden) {
+        loadEvents();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+  }, [user?.userId]);
 
   // Navigate to edit event page
   const handleEditEvent = (eventId: string) => {
@@ -246,48 +355,54 @@ export default function EventDashboard() {
     navigate(`/guest-builder?eventId=${eventId}`);
   };
 
-  // Sample events the user has been invited to
-  const invitedEvents = [
-    {
-      id: 'inv-1',
-      title: 'Summer Rooftop Mixer',
-      description: 'Networking event for tech professionals',
-      date: new Date(Date.now() + 3 * 24 * 60 * 60 * 1000),
-      location: 'Brooklyn, NY',
-      guestCount: 24,
-      maxAttendees: 40,
-      host: 'Sarah Chen',
-      rsvpStatus: 'pending' as const,
-      coverImage: 'https://images.unsplash.com/photo-1511795409834-ef04bbd61622?w=800&auto=format&fit=crop',
-    },
-    {
-      id: 'inv-2',
-      title: 'Founder Dinner',
-      description: 'Intimate dinner for startup founders',
-      date: new Date(Date.now() + 7 * 24 * 60 * 60 * 1000),
-      location: 'Manhattan, NY',
-      guestCount: 12,
-      maxAttendees: 15,
-      host: 'Alex Rivera',
-      rsvpStatus: 'going' as const,
-      coverImage: 'https://images.unsplash.com/photo-1505236858219-8359eb29e329?w=800&auto=format&fit=crop',
-    },
-    {
-      id: 'inv-3',
-      title: 'Design Community Meetup',
-      description: 'Monthly gathering for designers',
-      date: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
-      location: 'Williamsburg, NY',
-      guestCount: 35,
-      maxAttendees: 50,
-      host: 'Maya Johnson',
-      rsvpStatus: 'maybe' as const,
-      coverImage: 'https://images.unsplash.com/photo-1533174072545-7a4b6ad7a6c3?w=800&auto=format&fit=crop',
-    },
-  ];
+  // Handle RSVP updates
+  const handleRSVP = async (eventId: string, status: 'accepted' | 'declined') => {
+    try {
+      if (!user?.userId) {
+        toast({
+          title: "Error",
+          description: "You must be logged in to RSVP.",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      console.log('RSVP:', { eventId, userId: user.userId, status });
+      
+      await eventsApi.updateRSVP(eventId, user.userId, status);
+      
+      toast({ 
+        title: "RSVP Updated", 
+        description: status === 'accepted' ? "You're going to this event!" : "You've declined this invite." 
+      });
+      
+      // Reload events to show updated RSVP status
+      await loadEvents();
+    } catch (error: any) {
+      console.error('RSVP error:', error);
+      toast({
+        title: "Error",
+        description: error.message || "Failed to update RSVP.",
+        variant: "destructive",
+      });
+    }
+  };
 
   // Count pending invitations for badge
   const pendingCount = invitedEvents.filter(e => e.rsvpStatus === 'pending').length;
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-background">
+        <Navbar />
+        <main className="container max-w-4xl pt-28 sm:pt-24 pb-12 px-4">
+          <div className="animate-pulse text-muted-foreground text-center py-12">
+            Loading events...
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background">
@@ -337,7 +452,13 @@ export default function EventDashboard() {
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: index * 0.05 }}
                   >
-                    <EventCard event={event} isHosted onEdit={handleEditEvent} onManageGuests={handleManageGuests} />
+                    <EventCard 
+                      event={event} 
+                      isHosted 
+                      onEdit={handleEditEvent} 
+                      onManageGuests={handleManageGuests}
+                      userId={user?.userId}
+                    />
                   </motion.div>
                 ))}
               </div>
@@ -357,7 +478,11 @@ export default function EventDashboard() {
                     animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: index * 0.05 }}
                   >
-                    <EventCard event={event} />
+                    <EventCard 
+                      event={event}
+                      onRSVP={handleRSVP}
+                      userId={user?.userId}
+                    />
                   </motion.div>
                 ))}
               </div>

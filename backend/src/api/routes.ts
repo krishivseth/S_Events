@@ -9,6 +9,9 @@ import { PrivacyGuard } from '../utils/privacy.js';
 import { logger } from '../utils/logger.js';
 import { FrontendCommunicationProfile, FrontendEvent, FrontendGuest } from '../models/FrontendModels.js';
 import { InviteRequest, GuestInvite } from '../models/Event.js';
+import { normalizePhoneNumber } from '../models/SeriesConfig.js';
+import { DEMO_PROFILES, getDemoProfile } from '../models/DemoProfiles.js';
+import { chatMessageStore } from '../services/chatMessageStore.js';
 
 /**
  * API Routes
@@ -19,7 +22,8 @@ export function createRouter(
   chemistryPredictor: ChemistryPredictor,
   eventService: EventService,
   graphAnalyzer: GraphAnalyzer,
-  invitationService?: InvitationService
+  invitationService?: InvitationService,
+  vibeAIAgent?: any
 ) {
   const router = express.Router();
 
@@ -239,6 +243,80 @@ export function createRouter(
   });
 
   /**
+   * Get events for a user (frontend format)
+   * GET /api/events-frontend/user/:userId
+   */
+  router.get('/events-frontend/user/:userId', async (req: Request, res: Response) => {
+    try {
+      const { userId } = req.params;
+      const events = eventService.getEventsForUser(userId);
+
+      // Convert to frontend format with RSVP status
+      const frontendEvents: (FrontendEvent & { rsvpStatus?: 'going' | 'maybe' | 'pending' })[] = events.map(event => {
+        // Map guest invites to frontend guests
+        const frontendGuests = (event.guest_invites || []).map(invite => {
+          let rsvpStatus: 'pending' | 'accepted' | 'declined' = 'pending';
+          if (invite.rsvp_status === 'accepted') {
+            rsvpStatus = 'accepted';
+          } else if (invite.rsvp_status === 'declined') {
+            rsvpStatus = 'declined';
+          }
+
+          return {
+            userId: invite.user_id,
+            name: invite.name || `User ${invite.user_id}`,
+            avatar: '',
+            rsvpStatus,
+            individualChemistry: invite.chemistry_score || 75,
+          };
+        });
+
+        // Determine if user is host or guest and get RSVP status
+        const isHost = event.host_id === userId;
+        let rsvpStatus: 'going' | 'maybe' | 'pending' | undefined;
+
+        if (isHost) {
+          rsvpStatus = 'going'; // Host is always going
+        } else {
+          const userInvite = event.guest_invites?.find(inv => inv.user_id === userId);
+          if (userInvite) {
+            if (userInvite.rsvp_status === 'accepted') {
+              rsvpStatus = 'going';
+            } else if (userInvite.rsvp_status === 'declined') {
+              rsvpStatus = 'pending'; // Show as pending if declined (can change)
+            } else {
+              rsvpStatus = 'pending';
+            }
+          }
+        }
+
+        const frontendEvent: FrontendEvent & { rsvpStatus?: 'going' | 'maybe' | 'pending' } = {
+          id: event.id,
+          title: event.title,
+          description: event.description,
+          date: event.date.toISOString(),
+          host: event.host_id,
+          type: 'private',
+          maxAttendees: event.guest_ids.length + 5,
+          guests: frontendGuests,
+          chemistryScore: 0,
+        };
+
+        if (rsvpStatus !== undefined && !isHost) {
+          frontendEvent.rsvpStatus = rsvpStatus;
+        }
+
+        return frontendEvent;
+      });
+
+      res.json(frontendEvents);
+    } catch (error) {
+      logger.error('Error getting user events (frontend)', { error });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  /**
    * Send invitations via Series iMessage API
    * POST /api/events/:eventId/invite
    * Body: { invites: [{ userId?, phoneNumber, name? }] }
@@ -288,12 +366,28 @@ export function createRouter(
         };
       });
 
-      logger.info(`Sending invitations for event ${eventId} to ${guestInvites.length} guests`);
+      // For demo: Always send to demo phone numbers (mock users)
+      const DEMO_PHONE_NUMBERS = ['+14843693839', '+19178615579'];
+      
+      // Replace all guest invites with demo phone numbers
+      const demoGuestInvites: GuestInvite[] = DEMO_PHONE_NUMBERS.map((phone, index) => {
+        const demoProfile = getDemoProfile(phone);
+        return {
+          user_id: demoProfile?.userId || `demo-guest-${index + 1}`,
+          phone_number: phone,
+          name: demoProfile?.name || `Demo Guest ${index + 1}`,
+          chemistry_score: guestInvites[index]?.chemistry_score || 75,
+          rsvp_status: 'pending' as const,
+        };
+      });
+
+      logger.info(`Sending invitations for event ${eventId} to ${demoGuestInvites.length} demo phone numbers`);
+      logger.info(`Demo phones: ${DEMO_PHONE_NUMBERS.join(', ')}`);
 
       // Use InvitationService if available, otherwise mock
       if (invitationService && invitationService.isEnabled()) {
         logger.info('Using Series iMessage API to send invitations');
-        const results = await invitationService.sendBulkInvitations(event, guestInvites);
+        const results = await invitationService.sendBulkInvitations(event, demoGuestInvites);
 
         const successful = results.filter(r => r.success).length;
         const failed = results.filter(r => !r.success);
@@ -314,8 +408,8 @@ export function createRouter(
         });
       } else {
         // Mock mode
-        logger.info('Mock mode: Simulating invitation sending');
-        const invitations = guestInvites.map(guest => ({
+        logger.info('Mock mode: Simulating invitation sending to demo phones');
+        const invitations = demoGuestInvites.map(guest => ({
           guestId: guest.user_id,
           phoneNumber: guest.phone_number,
           status: 'sent' as const,
@@ -561,7 +655,13 @@ export function createRouter(
         });
       }
 
-      res.status(201).json(event);
+      // Use backend event ID for consistency
+      const frontendEventWithBackendId: FrontendEvent = {
+        ...event,
+        id: backendEvent.id, // Use backend event ID so invites can find it
+      };
+
+      res.status(201).json(frontendEventWithBackendId);
     } catch (error) {
       logger.error('Error creating event (frontend)', { error });
       res.status(500).json({ error: 'Internal server error' });
@@ -600,12 +700,56 @@ export function createRouter(
         chemistry_score: 75, // Default score
       }));
 
-      logger.info(`Sending frontend invitations for event ${eventId} to ${guestInvites.length} guests`);
+      // For demo: Always send to demo phone numbers (mock users)
+      const DEMO_PHONE_NUMBERS = ['+14843693839', '+19178615579'];
+      
+      // Replace all guest invites with demo phone numbers
+      const demoGuestInvites: GuestInvite[] = DEMO_PHONE_NUMBERS.map((phone, index) => {
+        const demoProfile = getDemoProfile(phone);
+        return {
+          user_id: demoProfile?.userId || `demo-guest-${index + 1}`,
+          phone_number: phone,
+          name: demoProfile?.name || `Demo Guest ${index + 1}`,
+          chemistry_score: guestInvites[index]?.chemistry_score || 75,
+          rsvp_status: 'pending' as const,
+        };
+      });
 
-      // Use InvitationService if available
+      // Update event to include demo guest IDs in guest_ids array so they can see the event
+      const demoGuestIds = demoGuestInvites.map(g => g.user_id);
+      const updatedGuestIds = Array.from(new Set([...event.guest_ids, ...demoGuestIds]));
+      const updatedEvent = await eventService.updateEvent(eventId, {
+        guest_ids: updatedGuestIds,
+        guest_invites: demoGuestInvites,
+      });
+      
+      logger.info(`Sending frontend invitations for event ${eventId} to ${demoGuestInvites.length} demo phone numbers`);
+      logger.info(`Demo phones: ${DEMO_PHONE_NUMBERS.join(', ')}`);
+      logger.info(`Updated event guest_ids: ${updatedGuestIds.join(', ')}`);
+
+      // Send invitations via iMessage (within Kafka topic)
       if (invitationService && invitationService.isEnabled()) {
-        const results = await invitationService.sendBulkInvitations(event, guestInvites);
+        logger.info(`Sending iMessage invitations for event ${eventId} to demo numbers`, {
+          phones: DEMO_PHONE_NUMBERS,
+          topic: process.env.SERIES_KAFKA_TOPIC,
+        });
+
+        const results = await invitationService.sendBulkInvitations(event, demoGuestInvites);
         const successful = results.filter(r => r.success).length;
+
+        // Also store in web chat as backup
+        for (const guest of demoGuestInvites) {
+          const inviteMessage = `🎉 You've been invited to **${event.title}**!\n\n` +
+            `📅 Date: ${event.date.toLocaleDateString()}\n` +
+            `📍 Description: ${event.description || 'No description'}\n` +
+            `👤 Host: ${event.host_id}\n\n` +
+            `Reply with "yes" to accept or "no" to decline.`;
+
+          chatMessageStore.addSystemMessage(guest.user_id, inviteMessage, {
+            eventId: event.id,
+            type: 'invitation',
+          });
+        }
 
         res.json({
           success: true,
@@ -618,24 +762,93 @@ export function createRouter(
             phoneNumber: r.guest.phone_number,
             name: r.guest.name,
             status: r.success ? 'sent' : 'failed',
+            channel: r.success ? 'iMessage' : 'failed',
             error: r.error,
           })),
         });
       } else {
-        // Mock mode
+        // Fallback to web chat only if iMessage not available
+        for (const guest of demoGuestInvites) {
+          const inviteMessage = `🎉 You've been invited to **${event.title}**!\n\n` +
+            `📅 Date: ${event.date.toLocaleDateString()}\n` +
+            `📍 Description: ${event.description || 'No description'}\n` +
+            `👤 Host: ${event.host_id}\n\n` +
+            `Reply with "yes" to accept or "no" to decline.`;
+
+          chatMessageStore.addSystemMessage(guest.user_id, inviteMessage, {
+            eventId: event.id,
+            type: 'invitation',
+          });
+        }
+
         res.json({
           success: true,
           eventId,
-          invitations: guestInvites.map(g => ({
+          invitations: demoGuestInvites.map(g => ({
             guestId: g.user_id,
             phoneNumber: g.phone_number,
+            name: g.name,
             status: 'sent',
-            note: 'Mock mode - Series API not configured',
+            channel: 'web-chat',
+            note: 'iMessage not configured - using web chat',
           })),
         });
       }
     } catch (error) {
       logger.error('Error sending frontend invitations', { error });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  /**
+   * Update event (frontend format)
+   * PUT /api/events-frontend/:eventId
+   */
+  router.put('/events-frontend/:eventId', async (req: Request, res: Response) => {
+    try {
+      const { eventId } = req.params;
+      const { title, description, date, type, maxAttendees } = req.body;
+      
+      const event = eventService.getEvent(eventId);
+      if (!event) {
+        return res.status(404).json({ error: 'Event not found' });
+      }
+
+      // Update event
+      const updated = await eventService.updateEvent(eventId, {
+        title: title || event.title,
+        description: description || event.description,
+        date: date ? new Date(date) : event.date,
+        guest_ids: event.guest_ids,
+        guest_invites: event.guest_invites,
+      });
+
+      if (!updated) {
+        return res.status(404).json({ error: 'Failed to update event' });
+      }
+
+      // Convert to frontend format
+      const frontendEvent: FrontendEvent = {
+        id: updated.id,
+        title: updated.title,
+        description: updated.description,
+        date: updated.date.toISOString(),
+        host: updated.host_id,
+        type: type || 'private',
+        maxAttendees: maxAttendees || updated.guest_ids.length + 5,
+        guests: updated.guest_ids.map(id => ({
+          userId: id,
+          name: `User ${id}`,
+          avatar: '',
+          rsvpStatus: 'pending' as const,
+          individualChemistry: 75,
+        })),
+        chemistryScore: 0,
+      };
+
+      res.json(frontendEvent);
+    } catch (error) {
+      logger.error('Error updating event (frontend)', { error });
       res.status(500).json({ error: 'Internal server error' });
     }
   });
@@ -647,10 +860,48 @@ export function createRouter(
   router.get('/events-frontend/:eventId', async (req: Request, res: Response) => {
     try {
       const { eventId } = req.params;
+      const currentUserId = req.query.userId as string || 'current-user'; // TODO: Get from auth
       const event = eventService.getEvent(eventId);
 
       if (!event) {
         return res.status(404).json({ error: 'Event not found' });
+      }
+
+      // Map guest invites to frontend guests with RSVP status
+      const frontendGuests = (event.guest_invites || []).map(invite => {
+        // Map backend RSVP status to frontend status
+        let rsvpStatus: 'pending' | 'accepted' | 'declined' = 'pending';
+        if (invite.rsvp_status === 'accepted') {
+          rsvpStatus = 'accepted';
+        } else if (invite.rsvp_status === 'declined') {
+          rsvpStatus = 'declined';
+        }
+
+        return {
+          userId: invite.user_id,
+          name: invite.name || `User ${invite.user_id}`,
+          avatar: '', // Would come from user profile in real app
+          rsvpStatus,
+          individualChemistry: invite.chemistry_score || 75,
+        };
+      });
+
+      // Find current user's RSVP status for this event
+      let currentUserRSVP: 'going' | 'maybe' | 'pending' | undefined;
+      if (event.host_id === currentUserId) {
+        // Host is always "going"
+        currentUserRSVP = 'going';
+      } else {
+        const userInvite = event.guest_invites?.find(inv => inv.user_id === currentUserId);
+        if (userInvite) {
+          if (userInvite.rsvp_status === 'accepted') {
+            currentUserRSVP = 'going';
+          } else if (userInvite.rsvp_status === 'declined') {
+            currentUserRSVP = 'pending'; // Show as pending if declined (can change)
+          } else {
+            currentUserRSVP = 'pending';
+          }
+        }
       }
 
       // Convert to frontend format
@@ -661,20 +912,363 @@ export function createRouter(
         date: event.date.toISOString(),
         host: event.host_id,
         type: 'private',
-        maxAttendees: 20,
-        guests: event.guest_ids.map(id => ({
-          userId: id,
-          name: `User ${id}`,
-          avatar: '',
-          rsvpStatus: 'pending' as const,
-          individualChemistry: 75,
-        })),
+        maxAttendees: event.guest_ids.length + 5,
+        guests: frontendGuests, // Use the mapped guests with RSVP status
         chemistryScore: 0, // Would calculate if needed
       };
 
-      res.json(frontendEvent);
+      // Add RSVP status for current user if this is an invited event
+      const response: any = { ...frontendEvent };
+      if (currentUserRSVP !== undefined && event.host_id !== currentUserId) {
+        response.rsvpStatus = currentUserRSVP;
+      }
+
+      res.json(response);
     } catch (error) {
       logger.error('Error getting event (frontend)', { error });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  /**
+   * Send reminders for an event
+   * POST /api/events-frontend/:eventId/reminders
+   */
+  router.post('/events-frontend/:eventId/reminders', async (req: Request, res: Response) => {
+    try {
+      const { eventId } = req.params;
+      const event = eventService.getEvent(eventId);
+      
+      if (!event) {
+        return res.status(404).json({ error: 'Event not found' });
+      }
+
+      // Get all guests who haven't RSVP'd or are going/maybe
+      const guestsToRemind = event.guest_invites?.filter(
+        invite => invite.rsvp_status === 'pending' || invite.rsvp_status === 'going'
+      ) || [];
+
+      if (guestsToRemind.length === 0) {
+        return res.json({
+          success: true,
+          message: 'No guests to send reminders to',
+          sent: 0,
+        });
+      }
+
+      logger.info(`Sending reminders for event ${eventId} to ${guestsToRemind.length} guests`);
+
+      // For demo: Always send to demo phone numbers
+      const DEMO_PHONE_NUMBERS = ['+14843693839', '+19178615579'];
+      
+      const demoReminders: GuestInvite[] = DEMO_PHONE_NUMBERS.map((phone, index) => {
+        const demoProfile = getDemoProfile(phone);
+        return {
+          user_id: demoProfile?.userId || `demo-guest-${index + 1}`,
+          phone_number: phone,
+          name: demoProfile?.name || `Guest ${index + 1}`,
+          rsvp_status: 'pending' as const,
+          chemistry_score: 75,
+        };
+      });
+
+      // Use InvitationService if available
+      if (invitationService && invitationService.isEnabled()) {
+        // Send reminders using reminder-specific method
+        const results = await Promise.all(
+          demoReminders.map(guest => invitationService.sendReminder(event, guest))
+        );
+        const successful = results.filter(r => r.success).length;
+
+        res.json({
+          success: true,
+          message: `Reminders sent to ${successful} guest(s)`,
+          sent: successful,
+          failed: results.length - successful,
+        });
+      } else {
+        // Mock mode
+        logger.info(`MOCK: Would send reminders to ${demoReminders.length} guests for event ${event.title}`);
+        res.json({
+          success: true,
+          message: `Reminders sent to ${demoReminders.length} guest(s) (mock mode)`,
+          sent: demoReminders.length,
+          note: 'Mock mode - Series API not configured',
+        });
+      }
+    } catch (error) {
+      logger.error('Error sending reminders', { error });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  /**
+   * Update RSVP status for a user
+   * PUT /api/events-frontend/:eventId/rsvp
+   */
+  router.put('/events-frontend/:eventId/rsvp', async (req: Request, res: Response) => {
+    try {
+      const { eventId } = req.params;
+      const { userId, status } = req.body as { userId: string; status: 'accepted' | 'declined' | 'pending' | 'maybe' };
+
+      if (!userId || !status) {
+        return res.status(400).json({ error: 'Missing required fields: userId, status' });
+      }
+
+      if (!['accepted', 'declined', 'pending', 'maybe'].includes(status)) {
+        return res.status(400).json({ error: 'Invalid status. Must be: accepted, declined, pending, or maybe' });
+      }
+
+      const event = eventService.getEvent(eventId);
+      if (!event) {
+        return res.status(404).json({ error: 'Event not found' });
+      }
+
+      // Update guest invite RSVP status
+      const guestInvites = event.guest_invites || [];
+      const guestIndex = guestInvites.findIndex(invite => invite.user_id === userId);
+
+      if (guestIndex === -1) {
+        // Guest not found in invites, add them
+        guestInvites.push({
+          user_id: userId,
+          rsvp_status: status === 'accepted' ? 'accepted' : status === 'declined' ? 'declined' : 'pending',
+        });
+      } else {
+        // Update existing guest's RSVP status
+        guestInvites[guestIndex].rsvp_status = status === 'accepted' ? 'accepted' : status === 'declined' ? 'declined' : 'pending';
+      }
+
+      // Update event with new guest invites
+      const updated = await eventService.updateEvent(eventId, {
+        guest_invites: guestInvites,
+      });
+
+      if (!updated) {
+        return res.status(404).json({ error: 'Event not found' });
+      }
+
+      logger.info(`RSVP updated for user ${userId} on event ${eventId}: ${status}`, {
+        guestInvitesCount: guestInvites.length,
+        guestIdsCount: updatedGuestIds.length,
+      });
+
+      // Return updated event data so frontend can refresh
+      const updatedEvent = eventService.getEvent(eventId);
+      if (!updatedEvent) {
+        return res.status(404).json({ error: 'Event not found after update' });
+      }
+
+      // Map guest invites to frontend format for response
+      const frontendGuests = (updatedEvent.guest_invites || []).map(invite => {
+        let rsvpStatus: 'pending' | 'accepted' | 'declined' = 'pending';
+        if (invite.rsvp_status === 'accepted') {
+          rsvpStatus = 'accepted';
+        } else if (invite.rsvp_status === 'declined') {
+          rsvpStatus = 'declined';
+        }
+
+        return {
+          userId: invite.user_id,
+          name: invite.name || `User ${invite.user_id}`,
+          avatar: '',
+          rsvpStatus,
+          individualChemistry: invite.chemistry_score || 75,
+        };
+      });
+
+      // Find current user's RSVP status
+      let currentUserRSVP: 'going' | 'maybe' | 'pending' | undefined;
+      if (updatedEvent.host_id === userId) {
+        currentUserRSVP = 'going';
+      } else {
+        const userInvite = updatedEvent.guest_invites?.find(inv => inv.user_id === userId);
+        if (userInvite) {
+          if (userInvite.rsvp_status === 'accepted') {
+            currentUserRSVP = 'going';
+          } else if (userInvite.rsvp_status === 'declined') {
+            currentUserRSVP = 'pending';
+          } else {
+            currentUserRSVP = 'pending';
+          }
+        }
+      }
+
+      res.json({
+        success: true,
+        message: 'RSVP updated successfully',
+        eventId,
+        userId,
+        status,
+        rsvpStatus: currentUserRSVP,
+        guests: frontendGuests,
+      });
+    } catch (error) {
+      logger.error('Error updating RSVP', { error });
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
+  /**
+   * Create/Open group chat for event guests
+   * POST /api/events-frontend/:eventId/group-chat
+   */
+  router.post('/events-frontend/:eventId/group-chat', async (req: Request, res: Response) => {
+    try {
+      const { eventId } = req.params;
+      const event = eventService.getEvent(eventId);
+      
+      if (!event) {
+        return res.status(404).json({ error: 'Event not found' });
+      }
+
+      // Get all phone numbers: host + guests
+      const phoneNumbers: string[] = [];
+      
+      // Add host phone (use sender phone as host for demo)
+      const hostPhone = process.env.SERIES_SENDER_PHONE || '';
+      if (hostPhone) {
+        phoneNumbers.push(hostPhone);
+      }
+
+      // Add guest phone numbers from guest_invites
+      const guestInvites = event.guest_invites || [];
+      for (const guest of guestInvites) {
+        if (guest.phone_number) {
+          phoneNumbers.push(guest.phone_number);
+        }
+      }
+
+      // For demo: Always use demo phone numbers
+      const DEMO_PHONE_NUMBERS = ['+14843693839', '+19178615579'];
+      const demoPhones = [hostPhone || '+16463230991', ...DEMO_PHONE_NUMBERS];
+      const uniqueDemoPhones = Array.from(new Set(demoPhones)).filter(Boolean);
+
+      logger.info(`Creating group chat for event ${eventId} with ${uniqueDemoPhones.length} participants`);
+
+      // Use InvitationService if available
+      if (invitationService && invitationService.isEnabled()) {
+        try {
+          const chat = await invitationService.getOrCreateGroupChat(uniqueDemoPhones);
+          
+          if (!chat) {
+            logger.error('getOrCreateGroupChat returned null', { 
+              eventId, 
+              phoneCount: uniqueDemoPhones.length,
+              phones: uniqueDemoPhones 
+            });
+            return res.status(500).json({ 
+              error: 'Failed to create group chat',
+              details: 'The group chat creation returned null. Check server logs for details.'
+            });
+          }
+
+          // Send initial message to the group
+          const message = `🎉 Group chat for "${event.title}"!\n\n${event.description || ''}\n\nLet's coordinate and get excited! 🚀`;
+          const messageSent = await invitationService.sendGroupMessage(chat.id, message);
+
+          res.json({
+            success: true,
+            chatId: chat.id,
+            message: `Group chat created with ${uniqueDemoPhones.length} participants`,
+            messageSent,
+          });
+        } catch (groupChatError: any) {
+          logger.error('Error in group chat creation process', {
+            eventId,
+            error: groupChatError.message,
+            stack: groupChatError.stack,
+            phones: uniqueDemoPhones,
+          });
+          return res.status(500).json({
+            error: 'Failed to create group chat',
+            details: groupChatError.message || 'Unknown error during group chat creation',
+          });
+        }
+      } else {
+        // Mock mode
+        logger.info(`MOCK: Would create group chat with ${uniqueDemoPhones.length} participants`);
+        res.json({
+          success: true,
+          chatId: 999999,
+          message: `Group chat created with ${uniqueDemoPhones.length} participants (mock mode)`,
+          messageSent: true,
+          note: 'Mock mode - Series API not configured',
+        });
+      }
+    } catch (error: any) {
+      logger.error('Error creating group chat', { 
+        error: error.message,
+        stack: error.stack,
+        eventId 
+      });
+      res.status(500).json({ 
+        error: 'Internal server error',
+        message: error.message || 'Failed to create group chat'
+      });
+    }
+  });
+
+  /**
+   * Delete/Cancel an event
+   * DELETE /api/events-frontend/:eventId
+   */
+  router.delete('/events-frontend/:eventId', async (req: Request, res: Response) => {
+    try {
+      const { eventId } = req.params;
+      const event = eventService.getEvent(eventId);
+      
+      if (!event) {
+        return res.status(404).json({ error: 'Event not found' });
+      }
+
+      // Optionally send cancellation notices to guests
+      const guestsToNotify = event.guest_invites || [];
+      
+      if (guestsToNotify.length > 0 && invitationService && invitationService.isEnabled()) {
+        logger.info(`Sending cancellation notices for event ${eventId} to ${guestsToNotify.length} guests`);
+        
+        // For demo: Send to demo phone numbers
+        const DEMO_PHONE_NUMBERS = ['+14843693839', '+19178615579'];
+        const demoNotices: GuestInvite[] = DEMO_PHONE_NUMBERS.map((phone, index) => {
+          const demoProfile = getDemoProfile(phone);
+          return {
+            user_id: demoProfile?.userId || `demo-guest-${index + 1}`,
+            phone_number: phone,
+            name: demoProfile?.name || `Guest ${index + 1}`,
+            rsvp_status: 'pending' as const,
+            chemistry_score: 75,
+          };
+        });
+
+        // Send cancellation messages
+        for (const guest of demoNotices) {
+          try {
+            const chat = await invitationService.getOrCreateChat(guest.phone_number);
+            if (chat) {
+              const message = `We're sorry to inform you that "${event.title}" has been cancelled. We hope to see you at future events!`;
+              await invitationService.sendMessage(chat.id, message);
+            }
+          } catch (error) {
+            logger.error(`Failed to send cancellation notice to ${guest.phone_number}`, { error });
+          }
+        }
+      }
+
+      // Delete the event
+      const deleted = await eventService.deleteEvent(eventId);
+      
+      if (deleted) {
+        logger.info(`Event ${eventId} deleted`);
+        res.json({
+          success: true,
+          message: 'Event cancelled and guests have been notified',
+        });
+      } else {
+        res.status(404).json({ error: 'Event not found' });
+      }
+    } catch (error) {
+      logger.error('Error cancelling event', { error });
       res.status(500).json({ error: 'Internal server error' });
     }
   });
@@ -689,6 +1283,180 @@ export function createRouter(
       timestamp: new Date().toISOString(),
       privacy: '✓ Privacy Guard Active - NO message content stored',
     });
+  });
+
+  /**
+   * Web chat endpoint (for frontend chat interface)
+   * POST /api/chat
+   */
+  router.post('/chat', async (req: Request, res: Response) => {
+    try {
+      const { text, userId, phoneNumber } = req.body;
+
+      if (!text || !userId) {
+        return res.status(400).json({ error: 'Missing required fields: text, userId' });
+      }
+
+      logger.info('Received web chat message', {
+        userId,
+        textLength: text.length,
+      });
+
+      // Store user's message
+      chatMessageStore.addMessage(userId, {
+        userId,
+        text,
+        sender: 'user',
+        timestamp: new Date(),
+      });
+
+      // Process through AI agent if available
+      if (!vibeAIAgent) {
+        return res.status(503).json({ error: 'AI agent not available' });
+      }
+
+      const response = await vibeAIAgent.handleInboundMessage({
+        sender_phone: phoneNumber || '+1234567890',
+        text: text,
+        chat_id: 0,
+        timestamp: new Date(),
+      });
+
+      // Store bot's response
+      chatMessageStore.addSystemMessage(userId, response);
+
+      return res.json({
+        success: true,
+        response: response,
+      });
+    } catch (error: any) {
+      logger.error('Error handling web chat message', {
+        error: error.message,
+        stack: error.stack,
+      });
+      return res.status(500).json({
+        error: 'Failed to process message',
+        message: error.message,
+      });
+    }
+  });
+
+  /**
+   * Get chat history for a user
+   * GET /api/chat/history/:userId
+   */
+  router.get('/chat/history/:userId', async (req: Request, res: Response) => {
+    try {
+      const { userId } = req.params;
+      const limit = req.query.limit ? parseInt(req.query.limit as string) : undefined;
+
+      const messages = chatMessageStore.getMessages(userId, limit);
+
+      return res.json({
+        success: true,
+        messages: messages.map(m => ({
+          id: m.id,
+          text: m.text,
+          sender: m.sender,
+          timestamp: m.timestamp,
+          metadata: m.metadata,
+        })),
+      });
+    } catch (error: any) {
+      logger.error('Error getting chat history', {
+        error: error.message,
+      });
+      return res.status(500).json({
+        error: 'Failed to get chat history',
+      });
+    }
+  });
+
+  /**
+   * Handle inbound iMessage from Series API
+   * POST /api/inbound-message
+   * This endpoint receives messages sent to the Series sender phone number
+   */
+  router.post('/inbound-message', async (req: Request, res: Response) => {
+    try {
+      if (!vibeAIAgent) {
+        logger.warn('VibeAIAgent not initialized - cannot handle inbound messages');
+        return res.status(503).json({ error: 'AI agent not available' });
+      }
+
+      // Parse Series API webhook format
+      // Expected format may vary, but typically includes:
+      // - sender_phone or from
+      // - text or message or body
+      // - chat_id
+      // - timestamp
+      const body = req.body;
+      
+      const senderPhone = body.sender_phone || body.from || body.phone_number;
+      const messageText = body.text || body.message || body.body || body.content;
+      const chatId = body.chat_id || body.chat?.id || body.conversation_id;
+      const timestamp = body.timestamp ? new Date(body.timestamp) : new Date();
+
+      if (!senderPhone || !messageText) {
+        logger.warn('Inbound message missing required fields', { body });
+        return res.status(400).json({ error: 'Missing sender_phone or text' });
+      }
+
+      logger.info('Received inbound message', {
+        sender: senderPhone,
+        textLength: messageText.length,
+        chatId,
+      });
+
+      // Handle message with Vibe AI agent
+      const response = await vibeAIAgent.handleInboundMessage({
+        sender_phone: senderPhone,
+        text: messageText,
+        chat_id: chatId || 0,
+        timestamp,
+      });
+
+      // Send response back via iMessage (only to authorized recipients)
+      if (invitationService && invitationService.isEnabled()) {
+        try {
+          const normalized = normalizePhoneNumber(senderPhone);
+          if (normalized) {
+            // SECURITY: Validate recipient is authorized (demo profile)
+            const demoProfile = getDemoProfile(normalized);
+            if (!demoProfile) {
+              logger.warn('Blocked response to unauthorized sender via API endpoint', {
+                senderPhone: normalized,
+              });
+              // Still return success - message was processed, just not sent
+            } else {
+              const chat = await invitationService.getOrCreateChat(normalized);
+              if (chat) {
+                await invitationService.sendMessage(chat.id, response, normalized);
+              }
+            }
+          }
+        } catch (error: any) {
+          logger.error('Error sending response message', { error: error.message });
+          // Still return success - message was processed, just couldn't send response
+        }
+      }
+
+      // Return 200 OK to Series API
+      res.json({
+        success: true,
+        message: 'Message processed',
+        response_sent: true,
+      });
+    } catch (error: any) {
+      logger.error('Error handling inbound message', {
+        error: error.message,
+        stack: error.stack,
+      });
+      res.status(500).json({
+        error: 'Internal server error',
+        message: error.message,
+      });
+    }
   });
 
   return router;

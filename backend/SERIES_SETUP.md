@@ -19,7 +19,7 @@ NODE_ENV=development
 
 # Series iMessage API
 SERIES_API_KEY=your-api-key-here
-SERIES_SENDER_PHONE=+1234567890
+SERIES_SENDER_PHONE=+16463230991
 SERIES_API_BASE_URL=https://series-hackathon-service-202642729529.us-east1.run.app
 USE_SERIES_API=true
 
@@ -27,9 +27,9 @@ USE_SERIES_API=true
 SERIES_KAFKA_BROKERS=pkc-619z3.us-east1.gcp.confluent.cloud:9092
 SERIES_KAFKA_TOPIC=team.team.6135e93cffe245169148f11402bb3476
 SERIES_KAFKA_GROUP_ID=team-cg-6135e93cffe245169148f11402bb3476
-SERIES_KAFKA_CLIENT_ID=series-events-consumer
-SERIES_KAFKA_API_KEY=your-kafka-api-key
-SERIES_KAFKA_API_SECRET=your-kafka-api-secret
+SERIES_KAFKA_CLIENT_ID=team-client-6135e93cffe245169148f11402bb3476
+SERIES_KAFKA_SASL_USERNAME=QRHNR6BCKVHD4M3U
+SERIES_KAFKA_SASL_PASSWORD=your-sasl-password-here
 USE_SERIES_API=true
 
 # Logging
@@ -96,8 +96,8 @@ curl -X POST http://localhost:3001/api/events/:eventId/invite \
 - `SERIES_KAFKA_TOPIC`: Topic name from Series team
 - `SERIES_KAFKA_GROUP_ID`: Consumer group ID
 - `SERIES_KAFKA_CLIENT_ID`: Unique client identifier
-- `SERIES_KAFKA_API_KEY`: Confluent Cloud API key (for SASL_SSL)
-- `SERIES_KAFKA_API_SECRET`: Confluent Cloud API secret
+- `SERIES_KAFKA_SASL_USERNAME`: SASL username (for SASL_SSL)
+- `SERIES_KAFKA_SASL_PASSWORD`: SASL password
 
 ## Features
 
@@ -120,9 +120,10 @@ curl -X POST http://localhost:3001/api/events/:eventId/invite \
 
 ### Kafka Connection Issues
 1. Check broker URL format (should include port)
-2. Verify API key/secret are correct
+2. Verify SASL username/password are correct
 3. Check network connectivity
 4. Review `kafka-messages.log` for message format
+5. Ensure TLS is enabled (SASL_SSL)
 
 ### iMessage API Issues
 1. Verify API key is valid

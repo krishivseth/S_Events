@@ -16,6 +16,9 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { toast } from '@/hooks/use-toast';
 import { mockProfiles } from '@/data/mockEventData';
+import { eventsApi } from '@/services/api';
+import { useEffect, useState } from 'react';
+import { useAuth } from '@/contexts/AuthContext';
 
 // Mock event data - in real app this would come from API
 const eventData: Record<string, {
@@ -131,7 +134,63 @@ const eventData: Record<string, {
 export default function EventDetail() {
   const { eventId } = useParams();
   const navigate = useNavigate();
-  const event = eventId ? eventData[eventId] : null;
+  const { user } = useAuth();
+  const [event, setEvent] = useState<any>(null);
+  const [isLoading, setIsLoading] = useState(true);
+
+  // Load event from API
+  useEffect(() => {
+    if (eventId && user?.userId) {
+      const currentUserId = user.userId;
+      eventsApi.getById(eventId, currentUserId)
+        .then((apiEvent) => {
+          // Transform API event to frontend format
+          // Determine if user is host
+          const isHosted = apiEvent.host === currentUserId;
+          
+          setEvent({
+            id: apiEvent.id,
+            title: apiEvent.title,
+            description: apiEvent.description,
+            date: new Date(apiEvent.date),
+            location: 'New York, NY',
+            address: '',
+            host: { name: apiEvent.host || 'You', avatar: mockProfiles[0]?.avatar || '' },
+            isHosted,
+            rsvpStatus: (apiEvent as any).rsvpStatus || (isHosted ? 'going' : 'pending'),
+            guests: (apiEvent.guests || []).map((g: any, i: number) => ({
+              id: g.userId,
+              name: g.name || `Guest ${i + 1}`,
+              avatar: g.avatar || '',
+              status: g.rsvpStatus === 'accepted' ? 'going' : g.rsvpStatus === 'declined' ? 'invited' : g.rsvpStatus === 'maybe' ? 'maybe' : 'invited'
+            })),
+            maxAttendees: apiEvent.maxAttendees || 20,
+            coverImage: 'https://images.unsplash.com/photo-1492684223066-81342ee5ff30?w=800&auto=format&fit=crop',
+          });
+          setIsLoading(false);
+        })
+        .catch((error) => {
+          console.error('Error loading event:', error);
+          toast({
+            title: "Error",
+            description: "Failed to load event details.",
+            variant: "destructive",
+          });
+          setIsLoading(false);
+        });
+    } else if (eventId && !user) {
+      // Wait for user to load
+      setIsLoading(true);
+    }
+  }, [eventId, user?.userId]); // Re-fetch when eventId or user changes
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center">
+        <div className="animate-pulse text-muted-foreground">Loading event...</div>
+      </div>
+    );
+  }
 
   if (!event) {
     return (
@@ -149,18 +208,165 @@ export default function EventDetail() {
   const goingCount = event.guests.filter(g => g.status === 'going').length;
   const maybeCount = event.guests.filter(g => g.status === 'maybe').length;
 
-  const handleRSVP = (status: 'going' | 'declined') => {
-    toast({
-      title: status === 'going' ? "You're going!" : "RSVP declined",
-      description: status === 'going' 
-        ? `See you at ${event.title}!` 
-        : "We'll miss you at this one.",
-    });
+  const handleRSVP = async (status: 'going' | 'declined') => {
+    if (!eventId || !event) return;
+
+    try {
+      // Map frontend status to backend status
+      const backendStatus = status === 'going' ? 'accepted' : 'declined';
+      const userId = user?.userId || 'current-user';
+      
+      await eventsApi.updateRSVP(eventId, userId, backendStatus);
+      
+      // Reload event from API to get updated data
+      const currentUserId = user?.userId || 'current-user';
+      const updatedEvent = await eventsApi.getById(eventId, currentUserId);
+      const isHosted = updatedEvent.host === currentUserId;
+      
+      // Update event state with fresh data
+      setEvent({
+        id: updatedEvent.id,
+        title: updatedEvent.title,
+        description: updatedEvent.description,
+        date: new Date(updatedEvent.date),
+        location: event.location,
+        address: event.address,
+        host: event.host,
+        isHosted,
+        rsvpStatus: (updatedEvent as any).rsvpStatus || (isHosted ? 'going' : 'pending'),
+        guests: (updatedEvent.guests || []).map((g: any) => ({
+          id: g.userId,
+          name: g.name || `Guest`,
+          avatar: g.avatar || '',
+          status: g.rsvpStatus === 'accepted' ? 'going' : g.rsvpStatus === 'declined' ? 'invited' : g.rsvpStatus === 'maybe' ? 'maybe' : 'invited'
+        })),
+        maxAttendees: updatedEvent.maxAttendees || 20,
+        coverImage: event.coverImage,
+      });
+      
+      toast({
+        title: status === 'going' ? "You're going!" : "RSVP declined",
+        description: status === 'going' 
+          ? `See you at ${event.title}!` 
+          : "We'll miss you at this one.",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to update RSVP.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleChangeRSVP = async () => {
+    if (!eventId || !event) return;
+
+    try {
+      // Reset to pending to allow changing
+      const userId = user?.userId || 'current-user';
+      await eventsApi.updateRSVP(eventId, userId, 'pending');
+      
+      // Reload event from API
+      const currentUserId = user?.userId || 'current-user';
+      const updatedEvent = await eventsApi.getById(eventId, currentUserId);
+      const isHosted = updatedEvent.host === currentUserId;
+      
+      setEvent({
+        id: updatedEvent.id,
+        title: updatedEvent.title,
+        description: updatedEvent.description,
+        date: new Date(updatedEvent.date),
+        location: event.location,
+        address: event.address,
+        host: event.host,
+        isHosted,
+        rsvpStatus: 'pending',
+        guests: (updatedEvent.guests || []).map((g: any) => ({
+          id: g.userId,
+          name: g.name || `Guest`,
+          avatar: g.avatar || '',
+          status: g.rsvpStatus === 'accepted' ? 'going' : g.rsvpStatus === 'declined' ? 'invited' : g.rsvpStatus === 'maybe' ? 'maybe' : 'invited'
+        })),
+        maxAttendees: updatedEvent.maxAttendees || 20,
+        coverImage: event.coverImage,
+      });
+      
+      toast({
+        title: "RSVP Reset",
+        description: "You can now change your RSVP.",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to change RSVP.",
+        variant: "destructive",
+      });
+    }
   };
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(window.location.href);
     toast({ title: "Link copied!", description: "Share it with your friends." });
+  };
+
+  const handleSendReminders = async () => {
+    if (!eventId) return;
+
+    try {
+      const result = await eventsApi.sendReminders(eventId);
+      toast({
+        title: "Reminders Sent!",
+        description: result.message || "Reminders have been sent to all guests.",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to send reminders.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleCancelEvent = async () => {
+    if (!eventId) return;
+
+    if (!confirm("Are you sure you want to cancel this event? This action cannot be undone.")) {
+      return;
+    }
+
+    try {
+      await eventsApi.delete(eventId);
+      toast({
+        title: "Event Cancelled",
+        description: "The event has been cancelled and guests have been notified.",
+      });
+      navigate('/events');
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to cancel event.",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const handleMessageGuests = async () => {
+    if (!eventId) return;
+
+    try {
+      const result = await eventsApi.createGroupChat(eventId);
+      toast({
+        title: "Group Chat Created!",
+        description: result.message || "Group chat has been created with all guests on iMessage.",
+      });
+    } catch (error: any) {
+      toast({
+        title: "Error",
+        description: error.message || "Failed to create group chat.",
+        variant: "destructive",
+      });
+    }
   };
 
   return (
@@ -191,8 +397,14 @@ export default function EventDetail() {
                     <Users className="w-4 h-4 mr-2" />
                     Manage Guests
                   </DropdownMenuItem>
-                  <DropdownMenuItem>Send Reminders</DropdownMenuItem>
-                  <DropdownMenuItem className="text-destructive">Cancel Event</DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleSendReminders}>
+                    <MessageSquare className="w-4 h-4 mr-2" />
+                    Send Reminders
+                  </DropdownMenuItem>
+                  <DropdownMenuItem className="text-destructive" onClick={handleCancelEvent}>
+                    <X className="w-4 h-4 mr-2" />
+                    Cancel Event
+                  </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             )}
@@ -378,17 +590,17 @@ export default function EventDetail() {
                 </Button>
               </>
             ) : (
-              <div className="flex-1 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <Badge className="bg-chemistry-high">
-                    {event.rsvpStatus === 'going' ? 'Going' : 'Maybe'}
-                  </Badge>
-                  <span className="text-sm text-muted-foreground">You've RSVP'd to this event</span>
-                </div>
-                <Button variant="outline" size="sm">
-                  Change RSVP
-                </Button>
-              </div>
+                  <div className="flex-1 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Badge className="bg-chemistry-high">
+                        {event.rsvpStatus === 'going' ? 'Going' : 'Maybe'}
+                      </Badge>
+                      <span className="text-sm text-muted-foreground">You've RSVP'd to this event</span>
+                    </div>
+                    <Button variant="outline" size="sm" onClick={handleChangeRSVP}>
+                      Change RSVP
+                    </Button>
+                  </div>
             )}
           </div>
         </motion.div>
@@ -406,7 +618,7 @@ export default function EventDetail() {
               <Copy className="w-4 h-4 mr-2" />
               Copy Invite Link
             </Button>
-            <Button className="flex-1">
+            <Button className="flex-1" onClick={handleMessageGuests}>
               <MessageSquare className="w-4 h-4 mr-2" />
               Message Guests
             </Button>

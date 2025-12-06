@@ -16,8 +16,8 @@ export interface SeriesCredentials {
     groupId: string;
     clientId: string;
     // Confluent Cloud SASL authentication
-    apiKey?: string;
-    apiSecret?: string;
+    saslUsername?: string;
+    saslPassword?: string;
     securityProtocol?: 'SASL_SSL' | 'PLAINTEXT';
     saslMechanism?: 'PLAIN';
   };
@@ -31,7 +31,7 @@ export function loadSeriesCredentials(): SeriesCredentials | null {
   const apiKey = process.env.SERIES_API_KEY || '';
   const senderPhone = process.env.SERIES_SENDER_PHONE || '';
   const apiBaseUrl = process.env.SERIES_API_BASE_URL || 
-    'https://series-hackathon-service-202642729529.us-east1.run.app';
+    'https://series-hackathon-service-202642739529.us-east1.run.app';
 
   // Check if we have at least some credentials (Kafka or iMessage API)
   const hasKafka = process.env.SERIES_KAFKA_BROKERS && 
@@ -58,8 +58,8 @@ export function loadSeriesCredentials(): SeriesCredentials | null {
   const kafkaTopic = process.env.SERIES_KAFKA_TOPIC;
   const kafkaGroupId = process.env.SERIES_KAFKA_GROUP_ID;
   const kafkaClientId = process.env.SERIES_KAFKA_CLIENT_ID;
-  const kafkaApiKey = process.env.SERIES_KAFKA_API_KEY;
-  const kafkaApiSecret = process.env.SERIES_KAFKA_API_SECRET;
+  const kafkaSaslUsername = process.env.SERIES_KAFKA_SASL_USERNAME;
+  const kafkaSaslPassword = process.env.SERIES_KAFKA_SASL_PASSWORD;
 
   if (kafkaBrokers && kafkaTopic && kafkaGroupId && kafkaClientId) {
     credentials.kafka = {
@@ -68,10 +68,10 @@ export function loadSeriesCredentials(): SeriesCredentials | null {
       groupId: kafkaGroupId,
       clientId: kafkaClientId,
       // Confluent Cloud SASL authentication
-      apiKey: kafkaApiKey,
-      apiSecret: kafkaApiSecret,
-      securityProtocol: kafkaApiKey && kafkaApiSecret ? 'SASL_SSL' : 'PLAINTEXT',
-      saslMechanism: kafkaApiKey && kafkaApiSecret ? 'PLAIN' : undefined,
+      saslUsername: kafkaSaslUsername,
+      saslPassword: kafkaSaslPassword,
+      securityProtocol: kafkaSaslUsername && kafkaSaslPassword ? 'SASL_SSL' : 'PLAINTEXT',
+      saslMechanism: kafkaSaslUsername && kafkaSaslPassword ? 'PLAIN' : undefined,
     };
   }
 

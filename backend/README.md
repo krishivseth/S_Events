@@ -119,8 +119,8 @@ The core algorithm evaluates:
 - `SERIES_KAFKA_TOPIC` - Topic name
 - `SERIES_KAFKA_GROUP_ID` - Consumer group ID
 - `SERIES_KAFKA_CLIENT_ID` - Client ID
-- `SERIES_KAFKA_API_KEY` - Confluent Cloud API key (for SASL_SSL auth)
-- `SERIES_KAFKA_API_SECRET` - Confluent Cloud API secret
+- `SERIES_KAFKA_SASL_USERNAME` - SASL username (for SASL_SSL auth)
+- `SERIES_KAFKA_SASL_PASSWORD` - SASL password
 
 ### Legacy Kafka (fallback)
 - `KAFKA_BROKERS` - Comma-separated Kafka broker URLs

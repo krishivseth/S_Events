@@ -1,14 +1,19 @@
 import { Link, useLocation } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { Home, Calendar, PlusCircle, User } from 'lucide-react';
+import { Home, Calendar, PlusCircle, User, LogOut } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { useAuth } from '@/contexts/AuthContext';
+import { useNavigate } from 'react-router-dom';
 
 export default function Navbar() {
   const location = useLocation();
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
   
   const navItems = [
     { path: '/', label: 'Home', icon: Home },
     { path: '/events', label: 'Events', icon: Calendar },
+    { path: '/chat', label: 'Chat AI', icon: Calendar },
     { path: '/create-event', label: 'Create', icon: PlusCircle },
   ];
 
@@ -35,11 +40,40 @@ export default function Navbar() {
           })}
         </nav>
 
-        <Link to="/privacy">
-          <Button variant="ghost" size="icon" className="rounded-full">
-            <User className="w-5 h-5" />
-          </Button>
-        </Link>
+        <div className="flex items-center gap-2">
+          {user && (
+            <span className="text-sm text-muted-foreground hidden sm:inline">
+              {user.name}
+            </span>
+          )}
+          {!user && (
+            <Link to="/login">
+              <Button variant="ghost" size="sm">
+                Login
+              </Button>
+            </Link>
+          )}
+          {user && (
+            <>
+              <Link to="/privacy">
+                <Button variant="ghost" size="icon" className="rounded-full">
+                  <User className="w-5 h-5" />
+                </Button>
+              </Link>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="rounded-full"
+                onClick={() => {
+                  logout();
+                  navigate('/login');
+                }}
+              >
+                <LogOut className="w-5 h-5" />
+              </Button>
+            </>
+          )}
+        </div>
       </div>
 
       {/* Mobile nav */}

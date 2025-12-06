@@ -104,7 +104,64 @@ export const eventsApi = {
    * Get all events for a user
    */
   async getByUser(userId: string): Promise<any[]> {
-    return fetchApi<any[]>(`/events/user/${userId}`);
+    return fetchApi<any[]>(`/events-frontend/user/${userId}`);
+  },
+
+  /**
+   * Send invitations for an event
+   */
+  async sendInvites(eventId: string, invites: Array<{ userId?: string; phoneNumber?: string; name?: string }>): Promise<any> {
+    return fetchApi<any>(`/events-frontend/${eventId}/invite`, {
+      method: 'POST',
+      body: JSON.stringify({ invites }),
+    });
+  },
+
+  /**
+   * Update an event
+   */
+  async update(eventId: string, eventData: any): Promise<any> {
+    return fetchApi<any>(`/events-frontend/${eventId}`, {
+      method: 'PUT',
+      body: JSON.stringify(eventData),
+    });
+  },
+
+  /**
+   * Send reminders for an event
+   */
+  async sendReminders(eventId: string): Promise<any> {
+    return fetchApi<any>(`/events-frontend/${eventId}/reminders`, {
+      method: 'POST',
+    });
+  },
+
+  /**
+   * Cancel/delete an event
+   */
+  async delete(eventId: string): Promise<any> {
+    return fetchApi<any>(`/events-frontend/${eventId}`, {
+      method: 'DELETE',
+    });
+  },
+
+  /**
+   * Update RSVP status for current user
+   */
+  async updateRSVP(eventId: string, userId: string, status: 'accepted' | 'declined' | 'maybe'): Promise<any> {
+    return fetchApi<any>(`/events-frontend/${eventId}/rsvp`, {
+      method: 'PUT',
+      body: JSON.stringify({ userId, status }),
+    });
+  },
+
+  /**
+   * Create/Open group chat for event guests
+   */
+  async createGroupChat(eventId: string): Promise<any> {
+    return fetchApi<any>(`/events-frontend/${eventId}/group-chat`, {
+      method: 'POST',
+    });
   },
 };
 

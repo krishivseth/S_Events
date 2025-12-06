@@ -10,6 +10,7 @@ import { Switch } from '@/components/ui/switch';
 import { CoverImagePicker } from '@/components/CoverImagePicker';
 import { toast } from '@/hooks/use-toast';
 import { mockEvents } from '@/data/mockEventData';
+import { eventsApi } from '@/services/api';
 
 // Mock event data for editing
 const getEventData = (eventId: string) => {
@@ -59,28 +60,80 @@ export default function EditEvent() {
 
   useEffect(() => {
     if (eventId) {
-      const event = getEventData(eventId);
-      if (event) {
-        setFormData({
-          title: event.title,
-          description: event.description,
-          date: event.date.toISOString().split('T')[0],
-          time: event.date.toTimeString().slice(0, 5),
-          location: event.location,
-          address: event.address || '',
-          isPrivate: event.isPrivate,
-          maxAttendees: event.maxAttendees,
-          coverImage: event.coverImage || '',
+      // Try to load from API first
+      eventsApi.getById(eventId)
+        .then((apiEvent) => {
+          const eventDate = new Date(apiEvent.date);
+          setFormData({
+            title: apiEvent.title,
+            description: apiEvent.description,
+            date: eventDate.toISOString().split('T')[0],
+            time: eventDate.toTimeString().slice(0, 5),
+            location: 'New York, NY', // API might not have location yet
+            address: '',
+            isPrivate: apiEvent.type === 'private',
+            maxAttendees: apiEvent.maxAttendees || 10,
+            coverImage: '',
+          });
+          setIsLoading(false);
+        })
+        .catch(() => {
+          // Fallback to mock data
+          const event = getEventData(eventId);
+          if (event) {
+            setFormData({
+              title: event.title,
+              description: event.description,
+              date: event.date.toISOString().split('T')[0],
+              time: event.date.toTimeString().slice(0, 5),
+              location: event.location,
+              address: event.address || '',
+              isPrivate: event.isPrivate,
+              maxAttendees: event.maxAttendees,
+              coverImage: event.coverImage || '',
+            });
+          }
+          setIsLoading(false);
         });
-      }
-      setIsLoading(false);
     }
   }, [eventId]);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    toast({ title: "Event updated!", description: "Your changes have been saved." });
-    navigate(`/events/${eventId}`);
+    
+    if (!eventId) {
+      toast({ 
+        title: "Error", 
+        description: "Event ID is required",
+        variant: "destructive"
+      });
+      return;
+    }
+
+    try {
+      const eventDate = new Date(`${formData.date}T${formData.time}`);
+      
+      await eventsApi.update(eventId, {
+        title: formData.title,
+        description: formData.description,
+        date: eventDate.toISOString(),
+        type: formData.isPrivate ? 'private' : 'public',
+        maxAttendees: formData.maxAttendees,
+      });
+
+      toast({ 
+        title: "Event updated!", 
+        description: "Your changes have been saved." 
+      });
+      navigate(`/events/${eventId}`);
+    } catch (error: any) {
+      console.error('Error updating event:', error);
+      toast({ 
+        title: "Error updating event", 
+        description: error.message || 'Failed to update event',
+        variant: "destructive"
+      });
+    }
   };
 
   if (isLoading) {

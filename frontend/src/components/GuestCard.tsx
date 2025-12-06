@@ -1,3 +1,4 @@
+import { forwardRef } from 'react';
 import { motion } from 'framer-motion';
 import { CommunicationProfile } from '@/types/event';
 import { getIndividualChemistry } from '@/services/chemistryCalculator';
@@ -13,7 +14,7 @@ interface GuestCardProps {
   index?: number;
 }
 
-export default function GuestCard({ profile, isSelected, onToggle, onViewProfile, index = 0 }: GuestCardProps) {
+const GuestCard = forwardRef<HTMLDivElement, GuestCardProps>(({ profile, isSelected, onToggle, onViewProfile, index = 0 }, ref) => {
   const chemistry = getIndividualChemistry(profile);
   
   const getChemistryColor = (score: number) => {
@@ -83,4 +84,8 @@ export default function GuestCard({ profile, isSelected, onToggle, onViewProfile
       </div>
     </motion.div>
   );
-}
+});
+
+GuestCard.displayName = 'GuestCard';
+
+export default GuestCard;

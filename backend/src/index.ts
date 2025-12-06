@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import { ProfileBuilder } from './services/profileBuilder.js';
@@ -12,6 +13,8 @@ import { createRouter } from './api/routes.js';
 import { requestLogger, errorHandler, corsOptions } from './api/middleware.js';
 import { logger } from './utils/logger.js';
 import { loadSeriesCredentials } from './models/SeriesConfig.js';
+import { VibeAIAgent } from './services/inboundMessageHandler.js';
+import { MessagePoller } from './services/messagePoller.js';
 
 /**
  * Main application entry point
@@ -30,7 +33,7 @@ async function main() {
       logger.info('✓ Series Kafka credentials loaded');
       logger.info(`  Topic: ${seriesCredentials.kafka.topic}`);
       logger.info(`  Brokers: ${seriesCredentials.kafka.brokers.length}`);
-      logger.info(`  Auth: ${seriesCredentials.kafka.apiKey ? 'SASL_SSL' : 'None'}`);
+      logger.info(`  Auth: ${seriesCredentials.kafka.saslUsername ? 'SASL_SSL' : 'None'}`);
     }
     if (seriesCredentials.apiKey && seriesCredentials.senderPhone) {
       logger.info('✓ Series iMessage API credentials loaded');
@@ -102,36 +105,11 @@ async function main() {
       logger.info('✓ Kafka batch processing configured for profile building');
     }
   } else {
-    // Fallback to environment variables
-    const kafkaBrokers = process.env.KAFKA_BROKERS?.split(',') || [];
-    const kafkaTopic = process.env.KAFKA_TOPIC || 'series-messages';
-    const kafkaGroupId = process.env.KAFKA_GROUP_ID || 'series-events-group';
-    const kafkaClientId = process.env.KAFKA_CLIENT_ID;
-
-    if (kafkaBrokers.length > 0 && process.env.USE_KAFKA === 'true') {
-      try {
-        logger.info('Connecting to Kafka cluster (env vars)...');
-        const kafkaApiKey = process.env.SERIES_KAFKA_API_KEY;
-        const kafkaApiSecret = process.env.SERIES_KAFKA_API_SECRET;
-        
-        kafkaConsumer = new KafkaMessageConsumer(
-          kafkaBrokers,
-          kafkaTopic,
-          kafkaGroupId,
-          kafkaClientId,
-          kafkaApiKey && kafkaApiSecret ? {
-            apiKey: kafkaApiKey,
-            apiSecret: kafkaApiSecret,
-            securityProtocol: 'SASL_SSL',
-          } : undefined
-        );
-        await kafkaConsumer.start();
-        logger.info('✓ Kafka consumer connected (env vars)');
-      } catch (error) {
-        logger.warn('Failed to connect to Kafka, using mock data', { error });
-      }
-    } else {
-    logger.info('Using mock data generator (KAFKA_BROKERS not set or USE_KAFKA=false)');
+    // SECURITY: NO FALLBACK - Only use Series Kafka credentials
+    // This prevents accidentally connecting to generic/wrong Kafka topics
+    logger.warn('⚠️  Series Kafka credentials not found!');
+    logger.warn('    ONLY Series credentials (SERIES_KAFKA_*) are accepted');
+    logger.warn('    No fallback to generic KAFKA_* environment variables');
     
     // Generate mock data for demo
     const mockMessages = MockDataGenerator.generateMockMessages(10, 30, 5);
@@ -149,7 +127,7 @@ async function main() {
       await profileBuilder.buildProfile(userId, userMessages);
     }
 
-    logger.info(`✓ ${userIds.size} profiles built from mock data`);
+      logger.info(`✓ ${userIds.size} profiles built from mock data`);
   }
 
   // Set up Express app
@@ -161,13 +139,35 @@ async function main() {
   app.use(express.json());
   app.use(requestLogger);
 
+  // Initialize Vibe AI Agent for conversational event management
+  const vibeAIAgent = new VibeAIAgent(
+    eventService,
+    invitationService,
+    chemistryPredictor,
+    profileBuilder,
+    seriesCredentials
+  );
+
+  // Initialize Message Poller (alternative to webhooks - polls Series API for messages)
+  const messagePoller = new MessagePoller(seriesCredentials, vibeAIAgent);
+  
+  // Start polling for messages if enabled (no webhook needed!)
+  if (messagePoller.isEnabled()) {
+    await messagePoller.start();
+    logger.info('✓ Message poller started - checking for new messages every 5 seconds');
+    logger.info('  No webhook configuration needed!');
+  } else {
+    logger.info('ℹ️  Message poller not enabled (missing Series API credentials)');
+  }
+
   // API Routes
   const apiRouter = createRouter(
     profileBuilder,
     chemistryPredictor,
     eventService,
     graphAnalyzer,
-    invitationService
+    invitationService,
+    vibeAIAgent
   );
   app.use('/api', apiRouter);
 
@@ -190,8 +190,14 @@ async function main() {
     logger.info('  POST /api/events-frontend');
     logger.info('  GET  /api/events/:eventId');
     logger.info('  GET  /api/events-frontend/:eventId');
+    logger.info('  PUT  /api/events-frontend/:eventId');
+    logger.info('  DELETE /api/events-frontend/:eventId');
+    logger.info('  GET  /api/events/user/:userId');
+    logger.info('  GET  /api/events-frontend/user/:userId');
     logger.info('  POST /api/events/:eventId/invite');
     logger.info('  POST /api/events-frontend/:eventId/invite');
+    logger.info('  POST /api/events-frontend/:eventId/group-chat');
+    logger.info('  POST /api/events-frontend/:eventId/reminders');
     logger.info('  GET  /api/privacy/export/:userId');
     logger.info('  DELETE /api/privacy/delete/:userId');
     logger.info('');
